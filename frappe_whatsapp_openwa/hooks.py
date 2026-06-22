@@ -66,9 +66,3 @@ fixtures = [
 # ─── Boot ────────────────────────────────────────────────────────────────
 extend_bootinfo = "frappe_whatsapp_openwa.utils.boot.get_bootinfo"
 
-# ─── event_bookings integration ──────────────────────────────────────────
-# Implements the hook fired by event_bookings' pre-event reminder scheduler.
-# event_bookings never imports from this app — it only calls frappe.get_hooks().
-event_booking_whatsapp_reminder = [
-	"frappe_whatsapp_openwa.utils.event_bookings.send_event_booking_reminder",
-]
