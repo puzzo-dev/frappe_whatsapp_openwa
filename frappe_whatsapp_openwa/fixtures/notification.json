@@ -1,0 +1,86 @@
+[
+  {
+    "name": "openwa-session-needs-attention",
+    "doctype": "Notification",
+    "subject": "OpenWA Session Needs Attention: {{ doc.session_name }}",
+    "document_type": "OpenWA Session",
+    "event": "Value Change",
+    "value_changed": "requires_human_attention",
+    "condition": "doc.requires_human_attention == 1",
+    "module": "WhatsApp Dual Gateway",
+    "enabled": 1,
+    "is_standard": 1,
+    "send_to_all_assignees": 0,
+    "channel": "Email",
+    "recipients": [
+      {
+        "doctype": "Notification Recipient",
+        "receiver_by_role": "System Manager"
+      }
+    ],
+    "message": "The OpenWA session <b>{{ doc.session_name }}</b> ({{ doc.phone_number }}) requires human attention.\n\n<b>Current status:</b> {{ doc.status }}\n\n{% if doc.status == 'QR Required' %}Please scan the QR code from the session form.{% elif doc.status == 'Restart Failed' %}Automatic restart has been exhausted ({{ doc.restart_attempt_count }} attempts). Manual intervention required.{% elif doc.status == 'Banned' %}This number has been banned by WhatsApp. A SIM swap is required.{% endif %}\n\n<a href=\"{{ frappe.utils.get_url() }}/app/openwa-session/{{ doc.name }}\">View Session</a>"
+  },
+  {
+    "name": "openwa-session-recovered",
+    "doctype": "Notification",
+    "subject": "OpenWA Session Recovered: {{ doc.session_name }}",
+    "document_type": "OpenWA Session",
+    "event": "Value Change",
+    "value_changed": "status",
+    "condition": "doc.status == 'Connected' and doc.requires_human_attention == 0",
+    "module": "WhatsApp Dual Gateway",
+    "enabled": 1,
+    "is_standard": 1,
+    "send_to_all_assignees": 0,
+    "recipients": [
+      {
+        "receiver_by_role": "System Manager",
+        "doctype": "Notification Recipient"
+      }
+    ],
+    "message": "The OpenWA session <b>{{ doc.session_name }}</b> ({{ doc.phone_number }}) is now <b>Connected</b> and operating normally.\n\n<a href=\"{{ frappe.utils.get_url() }}/app/openwa-session/{{ doc.name }}\">View Session</a>",
+    "channel": "Email"
+  },
+  {
+    "name": "openwa-session-banned",
+    "doctype": "Notification",
+    "subject": "URGENT: OpenWA Session Banned \u2014 {{ doc.session_name }}",
+    "document_type": "OpenWA Session",
+    "event": "Value Change",
+    "value_changed": "status",
+    "condition": "doc.status == 'Banned'",
+    "module": "WhatsApp Dual Gateway",
+    "enabled": 1,
+    "is_standard": 1,
+    "send_to_all_assignees": 0,
+    "recipients": [
+      {
+        "receiver_by_role": "System Manager",
+        "doctype": "Notification Recipient"
+      }
+    ],
+    "message": "<b>URGENT:</b> The WhatsApp number <b>{{ doc.phone_number }}</b> (session: {{ doc.session_name }}) has been <b>banned by WhatsApp</b>.\n\nA SIM swap is required before this number can be used again. Messages will not be delivered until the session is replaced.\n\n<a href=\"{{ frappe.utils.get_url() }}/app/openwa-session/{{ doc.name }}\">View Session</a>",
+    "channel": "Email"
+  },
+  {
+    "name": "openwa-session-restart-failed",
+    "doctype": "Notification",
+    "subject": "OpenWA Auto-Restart Failed: {{ doc.session_name }}",
+    "document_type": "OpenWA Session",
+    "event": "Value Change",
+    "value_changed": "status",
+    "condition": "doc.status == 'Restart Failed'",
+    "module": "WhatsApp Dual Gateway",
+    "enabled": 1,
+    "is_standard": 1,
+    "send_to_all_assignees": 0,
+    "recipients": [
+      {
+        "receiver_by_role": "System Manager",
+        "doctype": "Notification Recipient"
+      }
+    ],
+    "message": "The OpenWA session <b>{{ doc.session_name }}</b> ({{ doc.phone_number }}) failed to auto-restart after {{ doc.restart_attempt_count }} attempts.\n\nManual intervention is required. Please check the OpenWA gateway status and restart the session manually.\n\n<a href=\"{{ frappe.utils.get_url() }}/app/openwa-session/{{ doc.name }}\">View Session</a>",
+    "channel": "Email"
+  }
+]

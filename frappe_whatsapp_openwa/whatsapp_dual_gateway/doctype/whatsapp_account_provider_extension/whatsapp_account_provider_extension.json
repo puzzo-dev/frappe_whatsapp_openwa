@@ -1,0 +1,111 @@
+{
+ "actions": [],
+ "autoname": "field:linked_whatsapp_account",
+ "creation": "2026-06-22 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "linked_whatsapp_account",
+  "default_provider",
+  "routing_mode_override",
+  "openwa_session",
+  "column_break_1",
+  "allow_message_level_override",
+  "queue_on_unhealthy",
+  "auto_fallback_provider",
+  "section_break_2",
+  "enabled_providers"
+ ],
+ "fields": [
+  {
+   "fieldname": "linked_whatsapp_account",
+   "fieldtype": "Link",
+   "label": "WhatsApp Account",
+   "options": "WhatsApp Account",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "Meta Cloud API",
+   "fieldname": "default_provider",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Default Provider",
+   "options": "Meta Cloud API\nOpenWA",
+   "reqd": 1
+  },
+  {
+   "fieldname": "routing_mode_override",
+   "fieldtype": "Select",
+   "label": "Routing Mode Override",
+   "options": "inherit\nAccount-level\nMessage-level\nHybrid"
+  },
+  {
+   "fieldname": "openwa_session",
+   "fieldtype": "Link",
+   "label": "OpenWA Session",
+   "options": "OpenWA Session",
+   "depends_on": "eval:doc.default_provider=='OpenWA' || (doc.enabled_providers && doc.enabled_providers.some(r=>r.provider=='OpenWA' && r.enabled))",
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "allow_message_level_override",
+   "fieldtype": "Check",
+   "label": "Allow Message-level Override"
+  },
+  {
+   "default": "0",
+   "fieldname": "queue_on_unhealthy",
+   "fieldtype": "Check",
+   "label": "Queue Messages When Session Unhealthy"
+  },
+  {
+   "fieldname": "auto_fallback_provider",
+   "fieldtype": "Select",
+   "label": "Auto Fallback Provider",
+   "options": "\nMeta Cloud API"
+  },
+  {
+   "fieldname": "section_break_2",
+   "fieldtype": "Section Break",
+   "label": "Enabled Providers"
+  },
+  {
+   "fieldname": "enabled_providers",
+   "fieldtype": "Table",
+   "label": "Enabled Providers",
+   "options": "Provider Choice"
+  }
+ ],
+ "links": [],
+ "modified": "2026-06-22 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "WhatsApp Dual Gateway",
+ "name": "WhatsApp Account Provider Extension",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "linked_whatsapp_account"
+}

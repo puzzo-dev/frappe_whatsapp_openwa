@@ -1,0 +1,16 @@
+[
+  {
+    "name": "WhatsApp Message-custom_provider_used",
+    "doctype": "Custom Field",
+    "dt": "WhatsApp Message",
+    "fieldname": "custom_provider_used",
+    "fieldtype": "Select",
+    "label": "Provider Used",
+    "options": "\nmeta\nopenwa",
+    "read_only": 1,
+    "in_list_view": 0,
+    "in_standard_filter": 1,
+    "insert_after": "whatsapp_account",
+    "module": "WhatsApp Dual Gateway"
+  }
+]
