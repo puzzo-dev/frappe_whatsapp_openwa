@@ -1,5 +1,3 @@
-from . import __version__ as app_version
-
 app_name = "frappe_whatsapp_openwa"
 app_title = "WhatsApp Dual Gateway"
 app_publisher = "IVarse Technologies Limited"
@@ -11,6 +9,7 @@ required_apps = ["frappe_whatsapp"]
 # ─── DocType class override (primary interception point) ─────────────────
 override_doctype_class = {
 	"WhatsApp Message": "frappe_whatsapp_openwa.overrides.whatsapp_message.WhatsAppMessageDualGateway",
+	"WhatsApp Notification": "frappe_whatsapp_openwa.overrides.notification.WhatsAppNotificationDualGateway",
 }
 
 # ─── Override any direct frappe.call() API usage of frappe_whatsapp utils ─

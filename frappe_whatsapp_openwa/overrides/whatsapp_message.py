@@ -50,6 +50,13 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 		if self.type != "Outgoing":
 			return
 
+		# WhatsAppNotification.notify() creates a log doc with message_id already set
+		# (it sends directly to Meta via make_post_request before creating the doc).
+		# Routing that log doc through our stack would cause a double-send.
+		# Mirror the upstream guard: skip if message_id is already populated.
+		if self.message_id and self.message_type == "Template":
+			return
+
 		# Ensure the upstream base is really WhatsAppMessage (not the fallback Document).
 		if not hasattr(self, "_dual_gateway_base_verified"):
 			try:
