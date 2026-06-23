@@ -15,7 +15,10 @@
   "fallback_alert_email",
   "column_break_3",
   "webhook_secret",
-  "session_health_ttl_seconds"
+  "session_health_ttl_seconds",
+  "section_break_4",
+  "meta_rate_limit_max_calls",
+  "meta_rate_limit_window_seconds"
  ],
  "fields": [
   {
@@ -78,6 +81,23 @@
    "fieldname": "session_health_ttl_seconds",
    "fieldtype": "Int",
    "label": "Session Health Cache TTL (seconds)"
+  },
+  {
+   "fieldname": "section_break_4",
+   "fieldtype": "Section Break",
+   "label": "Meta API Rate Limiting"
+  },
+  {
+   "default": "100",
+   "fieldname": "meta_rate_limit_max_calls",
+   "fieldtype": "Int",
+   "label": "Max Meta Calls per Window"
+  },
+  {
+   "default": "60",
+   "fieldname": "meta_rate_limit_window_seconds",
+   "fieldtype": "Int",
+   "label": "Meta Rate Limit Window (seconds)"
   }
  ],
  "issingle": 1,

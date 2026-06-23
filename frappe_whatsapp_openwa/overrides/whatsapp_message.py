@@ -73,6 +73,8 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			super().send_outgoing()
 			return
 
+		self._check_meta_rate_limit(self.whatsapp_account)
+
 		try:
 			from frappe_whatsapp_openwa.routing.resolver import resolve_provider
 			provider, session_name = resolve_provider(self.whatsapp_account)
@@ -81,10 +83,12 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 				title="DualGateway: resolver error — falling back to Meta",
 				message=frappe.get_traceback(),
 			)
+			self._check_meta_rate_limit(self.whatsapp_account)
 			super().send_outgoing()
 			return
 
 		if provider == "meta":
+			self._check_meta_rate_limit(self.whatsapp_account)
 			super().send_outgoing()
 			return
 
@@ -113,6 +117,7 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 		"""
 		from frappe_whatsapp_openwa.providers.base import SendResult
 		try:
+			self._check_meta_rate_limit(self.whatsapp_account)
 			super().send_outgoing()
 			return SendResult(
 				success=self.status == "Success",
@@ -217,6 +222,16 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 
 		return []
 
+	# ── Meta rate limiting ─────────────────────────────────────────────
+
+	def _check_meta_rate_limit(self, account_name: str) -> None:
+		"""Abort the call if the Meta API per-account rate window is full."""
+		from frappe_whatsapp_openwa.utils.rate_limiter import check_rate_limit, raise_rate_limit_error
+
+		allowed, context = check_rate_limit(account_name, action="meta_send")
+		if not allowed:
+			raise_rate_limit_error(account_name, context)
+
 	# ── Daily soft cap ──────────────────────────────────────────────────
 
 	def _is_daily_cap_reached(self, session_name: str) -> bool:
@@ -251,6 +266,7 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			f"Daily soft cap reached for OpenWA session {session_name} — routing to Meta."
 		)
 		self.custom_provider_used = "meta"
+		self._check_meta_rate_limit(self.whatsapp_account)
 		super().send_outgoing()
 
 	# ── Queue helpers ────────────────────────────────────────────────────

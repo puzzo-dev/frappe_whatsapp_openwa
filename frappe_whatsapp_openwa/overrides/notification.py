@@ -52,6 +52,9 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
             if doc_company and doc_company != notification_company:
                 return  # wrong company — skip silently
 
+        account_name = self._resolve_account_name(doc)
+        if account_name:
+            self._check_meta_rate_limit(account_name)
         super().send_template_message(doc, phone_no, default_template, ignore_condition)
 
     # ── Routing override (notify) ─────────────────────────────────────────
@@ -67,6 +70,8 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
             super().notify(data, doc_data)
             return
 
+        self._check_meta_rate_limit(account_name)
+
         try:
             from frappe_whatsapp_openwa.routing.resolver import resolve_provider
             provider, session_name = resolve_provider(account_name)
@@ -75,10 +80,12 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
                 title="DualGateway Notification: resolver error — falling back to Meta",
                 message=frappe.get_traceback(),
             )
+            self._check_meta_rate_limit(account_name)
             super().notify(data, doc_data)
             return
 
         if provider == "meta":
+            self._check_meta_rate_limit(account_name)
             super().notify(data, doc_data)
             return
 
@@ -115,6 +122,14 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
             )
 
     # ── Helpers ─────────────────────────────────────────────────────────────
+
+    def _check_meta_rate_limit(self, account_name: str) -> None:
+        """Abort the call if the Meta API per-account rate window is full."""
+        from frappe_whatsapp_openwa.utils.rate_limiter import check_rate_limit, raise_rate_limit_error
+
+        allowed, context = check_rate_limit(account_name, action="meta_send")
+        if not allowed:
+            raise_rate_limit_error(account_name, context)
 
     def _resolve_account_name(self, doc_data=None) -> str | None:
         """Return the WhatsApp account name to use for routing.
