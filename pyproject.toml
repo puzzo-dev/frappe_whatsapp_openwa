@@ -3,7 +3,7 @@ name = "frappe_whatsapp_openwa"
 version = "0.1.0"
 description = "OpenWA gateway provider for frappe_whatsapp"
 authors = [
-    { name = "IVarse Technologies Limited", email = "tech@itechnologies.ng" }
+    { name = "I-Varse Technologies NG", email = "dev@itechnologies.ng" }
 ]
 license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.10"

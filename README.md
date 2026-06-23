@@ -1,6 +1,6 @@
 ### WhatsApp Dual Gateway
 
-IVarse Technologies Limited
+I-Varse Technologies NG
 
 ### Installation
 
