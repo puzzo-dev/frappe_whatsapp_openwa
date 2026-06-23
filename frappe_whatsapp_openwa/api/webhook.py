@@ -227,6 +227,9 @@ def _handle_ack(payload: dict, log) -> None:
 	)
 	if existing:
 		frappe.db.set_value("WhatsApp Message", existing, "status", ack["ack_status"])
+	else:
+		# ACK for an unknown message_id — keep an audit trail instead of dropping it.
+		log.error_message = f"ACK for unknown message_id {ack['message_id']}"
 
 	log.processed = 1
 	log.whatsapp_message_doc = existing or ""
