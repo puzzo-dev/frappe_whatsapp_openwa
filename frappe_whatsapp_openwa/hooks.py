@@ -46,6 +46,11 @@ scheduler_events = {
 		],
 		"0 3 * * 0": [
 			"frappe_whatsapp_openwa.monitoring.counters.purge_old_webhook_logs",
+			"frappe_whatsapp_openwa.monitoring.counters.purge_old_outbound_queue_rows",
+			"frappe_whatsapp_openwa.monitoring.counters.purge_old_fallback_logs",
+		],
+		"0 9 * * *": [
+			"frappe_whatsapp_openwa.monitoring.dead_letter.report_recent_dead_letters",
 		],
 	},
 }

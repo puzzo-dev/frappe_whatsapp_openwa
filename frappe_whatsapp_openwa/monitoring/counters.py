@@ -3,6 +3,8 @@
 import frappe
 
 _WEBHOOK_LOG_RETENTION_DAYS = 7
+_QUEUE_RETENTION_DAYS = 30
+_FALLBACK_LOG_RETENTION_DAYS = 90
 
 
 def reset_daily_message_counts():
@@ -57,6 +59,26 @@ def purge_old_webhook_logs():
 	cutoff = frappe.utils.add_days(frappe.utils.today(), -_WEBHOOK_LOG_RETENTION_DAYS)
 	frappe.db.sql(
 		"DELETE FROM `tabOpenWA Webhook Log` WHERE processed = 1 AND received_at < %s",
+		cutoff,
+	)
+	frappe.db.commit()
+
+
+def purge_old_outbound_queue_rows():
+	"""Weekly cron: delete terminal outbound queue rows older than retention window."""
+	cutoff = frappe.utils.add_days(frappe.utils.today(), -_QUEUE_RETENTION_DAYS)
+	frappe.db.sql(
+		"DELETE FROM `tabWhatsApp Outbound Queue` WHERE status IN ('Failed', 'Expired', 'Cancelled') AND modified < %s",
+		cutoff,
+	)
+	frappe.db.commit()
+
+
+def purge_old_fallback_logs():
+	"""Weekly cron: delete old fallback/dead-letter logs."""
+	cutoff = frappe.utils.add_days(frappe.utils.today(), -_FALLBACK_LOG_RETENTION_DAYS)
+	frappe.db.sql(
+		"DELETE FROM `tabWhatsApp Fallback Log` WHERE triggered_at < %s",
 		cutoff,
 	)
 	frappe.db.commit()

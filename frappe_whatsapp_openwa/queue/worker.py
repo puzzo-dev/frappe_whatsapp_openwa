@@ -124,7 +124,7 @@ def _process_row(row, now):
 
 
 def _handle_dispatch_failure(doc_name: str, error: str, attempts: int) -> None:
-	"""On failure: either schedule a retry with exponential backoff or mark Failed."""
+	"""On failure: either schedule a retry with exponential backoff or mark Failed and create a dead-letter record."""
 	max_attempts = len(_BACKOFF_MINUTES)
 	if attempts < max_attempts:
 		delay_minutes = _BACKOFF_MINUTES[min(attempts, len(_BACKOFF_MINUTES) - 1)]
@@ -139,6 +139,34 @@ def _handle_dispatch_failure(doc_name: str, error: str, attempts: int) -> None:
 			"status": "Failed",
 			"failure_log": error[:500],
 		})
+		_create_dead_letter(doc_name, error)
+
+
+def _create_dead_letter(queue_name: str, error: str) -> None:
+	"""Persist a dead-letter record for a permanently failed outbound message."""
+	row = frappe.db.get_value(
+		"WhatsApp Outbound Queue",
+		queue_name,
+		["account", "recipient", "message_type", "payload", "enqueued_at"],
+		as_dict=True,
+	)
+	if not row:
+		return
+	try:
+		frappe.get_doc({
+			"doctype": "WhatsApp Fallback Log",
+			"triggered_at": frappe.utils.now(),
+			"whatsapp_account": row.account,
+			"recipient_phone": row.recipient,
+			"attempted_provider": row.message_type,
+			"failure_reason": "Other",
+			"failure_detail": f"Dead letter after exhausting retries. Error: {error[:2000]}\nPayload: {row.payload[:2000]}",
+		}).insert(ignore_permissions=True)
+	except Exception:
+		frappe.log_error(
+			title=f"Failed to create dead-letter for queue {queue_name}",
+			message=frappe.get_traceback(),
+		)
 
 
 def _cap_reached(session_name: str) -> bool:
