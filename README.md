@@ -2,6 +2,59 @@
 
 I-Varse Technologies NG
 
+### Architecture
+
+This app adds a second provider (`OpenWA`) to `frappe_whatsapp` so messages can be routed through either the **Meta Cloud API** or a **self-hosted OpenWA** gateway.
+
+```
+WhatsApp Message / Notification
+        │
+        ▼
+┌─────────────────────────────┐
+│  DualGateway override class  │
+└─────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────┐
+│  Routing resolver (per      │
+│  WhatsApp Account)          │
+└─────────────────────────────┘
+        │
+   ┌────┴────┐
+   ▼         ▼
+OpenWA    Meta Cloud
+session   API
+  │
+  ▼
+Queue / Fallback
+```
+
+#### Routing modes
+
+- **Account-level**: a `WhatsApp Account` is configured to use `meta` or `openwa` via `WhatsApp Account Provider Extension`.
+- **OpenWA path**: the message is sent to the OpenWA gateway session. If the session is unhealthy, it is optionally queued; if the daily cap is reached, it falls back to Meta.
+- **Meta path**: the upstream `frappe_whatsapp` Meta Cloud API flow is used. Per-account rate limiting is enforced before the call.
+
+#### Fallback cascade
+
+1. Healthy OpenWA session → send via OpenWA.
+2. Unhealthy session + `queue_on_unhealthy` enabled → enqueue to `WhatsApp Outbound Queue`.
+3. Daily cap reached → route to Meta.
+4. Resolver error → route to Meta.
+5. Meta rate limit reached → throw `TooManyRequestsError` (or the caller catches and retries).
+
+#### Outbound queue and dead letters
+
+- `WhatsApp Outbound Queue` stores messages with exponential backoff (`process_outbound_queue` runs every minute).
+- After the maximum number of retries, the message is moved to `WhatsApp Fallback Log` (dead-letter) and a daily report is emailed.
+- Old terminal queue rows and fallback logs are purged weekly by scheduled data-retention tasks.
+
+#### Monitoring
+
+- `monitoring/health.py` checks all OpenWA sessions periodically.
+- `monitoring/alerts.py` sends alerts when sessions are down or queues are backed up.
+- `monitoring/metrics.py` exposes a whitelisted API for gateway/session/queue metrics.
+
 ### Installation
 
 You can install this app using the [bench](https://github.com/frappe/bench) CLI:
@@ -11,6 +64,12 @@ cd $PATH_TO_YOUR_BENCH
 bench get-app $URL_OF_THIS_REPO --branch develop
 bench install-app frappe_whatsapp_openwa
 ```
+
+### Configuration
+
+- Add `sentry_dsn` to `site_config.json` and install `sentry-sdk` to enable structured error reporting.
+- Configure `OpenWA Gateway Settings` (base URL, API key, rate limits, fallback email).
+- Configure `WhatsApp Account Provider Extension` per account (provider, session, queue, cap).
 
 ### Contributing
 
