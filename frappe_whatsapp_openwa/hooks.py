@@ -1,8 +1,8 @@
 app_name = "frappe_whatsapp_openwa"
 app_title = "WhatsApp Dual Gateway"
-app_publisher = "IVarse Technologies Limited"
+app_publisher = "I-Varse Technologies NG"
 app_description = "Routes WhatsApp messages through Meta Cloud API or self-hosted OpenWA gateway"
-app_email = "tech@itechnologies.ng"
+app_email = "dev@itechnologies.ng"
 app_license = "agpl-3.0"
 required_apps = ["frappe_whatsapp"]
 
