@@ -7,6 +7,7 @@ from typing import Callable, Literal
 import frappe
 
 from frappe_whatsapp_openwa.providers.base import (
+	OpenWAClientError,
 	OpenWANetworkError,
 	OpenWARateLimited,
 	OpenWASessionDown,
@@ -17,7 +18,7 @@ from frappe_whatsapp_openwa.providers.openwa import OpenWAAdapter
 from frappe_whatsapp_openwa.routing.fallback import FallbackContext, run_fallback, should_fallback
 from frappe_whatsapp_openwa.routing.resolver import resolve_provider
 
-_OPENWA_ERRORS = (OpenWASessionDown, OpenWARateLimited, OpenWANetworkError)
+_OPENWA_ERRORS = (OpenWASessionDown, OpenWARateLimited, OpenWANetworkError, OpenWAClientError)
 
 
 def route_send_text(

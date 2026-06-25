@@ -1,6 +1,6 @@
 [project]
 name = "frappe_whatsapp_openwa"
-version = "0.1.0"
+version = "1.0.0"
 description = "OpenWA gateway provider for frappe_whatsapp"
 authors = [
     { name = "I-Varse Technologies NG", email = "dev@itechnologies.ng" }

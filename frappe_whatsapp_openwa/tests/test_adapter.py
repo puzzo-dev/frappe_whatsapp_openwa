@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from frappe_whatsapp_openwa.providers.base import (
+	OpenWAClientError,
 	OpenWARateLimited,
 	OpenWASessionDown,
 )
@@ -65,9 +66,9 @@ class TestSendText:
 		with pytest.raises(OpenWASessionDown):
 			a.send_text("+2348012345678", "Hello", account="Test Account")
 
-	def test_client_error_raises_value_error(self):
+	def test_client_error_raises_openwa_client_error(self):
 		a = _adapter([(400, {"error": "bad request"})])
-		with pytest.raises(ValueError):
+		with pytest.raises(OpenWAClientError):
 			a.send_text("+2348012345678", "Hello", account="Test Account")
 
 	def test_message_id_falls_back_to_id_field(self):

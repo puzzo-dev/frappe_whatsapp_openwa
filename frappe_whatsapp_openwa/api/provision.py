@@ -13,6 +13,27 @@ from __future__ import annotations
 
 import frappe
 
+# Per-user rate limit: max 10 provision/deprovision calls per hour.
+_PROVISION_RATE_LIMIT_MAX = 10
+_PROVISION_RATE_LIMIT_WINDOW = 3600  # seconds
+
+
+def _check_provision_rate_limit() -> None:
+	"""Prevent rapid provisioning abuse by authenticated users."""
+	user = frappe.session.user or "Guest"
+	key = f"openwa:provision:ratelimit:{frappe.scrub(user)}"
+	pipe = frappe.cache().pipeline()
+	pipe.incr(key)
+	pipe.ttl(key)
+	count, ttl = pipe.execute()
+	if ttl < 0:
+		frappe.cache().expire(key, _PROVISION_RATE_LIMIT_WINDOW)
+	if count > _PROVISION_RATE_LIMIT_MAX:
+		frappe.throw(
+			frappe._("Too many provisioning requests. Please wait before trying again."),
+			frappe.TooManyRequestsError,
+		)
+
 
 @frappe.whitelist()
 def provision_session(session_name: str) -> dict:
@@ -21,6 +42,7 @@ def provision_session(session_name: str) -> dict:
 	Returns {"gateway_session_id": "...", "status": "Initializing"}.
 	Raises frappe.ValidationError on failure.
 	"""
+	_check_provision_rate_limit()
 	doc = frappe.get_doc("OpenWA Session", session_name)
 	doc.check_permission("write")
 
@@ -55,8 +77,13 @@ def provision_session(session_name: str) -> dict:
 			},
 		})
 		if resp.status_code not in (200, 201, 409):
+			try:
+				body = resp.json()
+				error_detail = str(body.get("message") or body.get("error") or "")[:200]
+			except Exception:
+				error_detail = ""
 			frappe.throw(
-				frappe._(f"Gateway returned {resp.status_code}: {resp.text}"),
+				frappe._(f"Gateway returned HTTP {resp.status_code}{': ' + error_detail if error_detail else '.'}"),
 				title=frappe._("Provisioning Failed"),
 			)
 		data = resp.json() if resp.text else {}
@@ -81,6 +108,7 @@ def provision_session(session_name: str) -> dict:
 @frappe.whitelist()
 def deprovision_session(session_name: str) -> dict:
 	"""Remove an OpenWA Session from the gateway and reset this doc."""
+	_check_provision_rate_limit()
 	doc = frappe.get_doc("OpenWA Session", session_name)
 	doc.check_permission("write")
 
@@ -98,7 +126,11 @@ def deprovision_session(session_name: str) -> dict:
 	try:
 		client.delete(f"/api/sessions/{doc.gateway_session_id}")
 	except Exception:
-		pass
+		frappe.log_error(
+			title=f"OpenWA: gateway DELETE failed for {doc.gateway_session_id}",
+			message=frappe.get_traceback(),
+		)
+		doc.requires_human_attention = 1
 
 	doc.gateway_session_id = ""
 	doc.status = "Initializing"

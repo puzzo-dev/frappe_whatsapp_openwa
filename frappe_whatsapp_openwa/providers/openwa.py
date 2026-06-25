@@ -5,6 +5,7 @@ from typing import Literal
 import httpx
 
 from frappe_whatsapp_openwa.providers.base import (
+	OpenWAClientError,
 	OpenWANetworkError,
 	OpenWARateLimited,
 	OpenWASessionDown,
@@ -104,4 +105,4 @@ class OpenWAAdapter(WhatsAppProvider):
 		if resp.status_code >= 500:
 			raise OpenWASessionDown(f"OpenWA server error {resp.status_code}: {resp.text}")
 		if resp.status_code >= 400:
-			raise ValueError(f"OpenWA client error {resp.status_code}: {resp.text}")
+			raise OpenWAClientError(f"OpenWA client error {resp.status_code}: {resp.text}")

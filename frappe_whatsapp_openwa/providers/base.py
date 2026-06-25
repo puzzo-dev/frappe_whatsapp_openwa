@@ -33,6 +33,14 @@ class OpenWANetworkError(Exception):
 	pass
 
 
+class OpenWAClientError(Exception):
+	"""4xx response from the OpenWA gateway (auth failure, session not found, etc.).
+
+	Not a transient error — falling back to Meta is correct behaviour.
+	"""
+	pass
+
+
 class WhatsAppProvider(ABC):
 	@abstractmethod
 	def send_text(self, to: str, body: str, account: str) -> SendResult: ...

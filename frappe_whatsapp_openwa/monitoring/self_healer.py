@@ -2,10 +2,10 @@ import frappe
 
 
 def heal_disconnected_sessions():
-	"""Every minute: attempt restart on Disconnected sessions past their grace window."""
+	"""Every 5 minutes: attempt restart on Disconnected sessions past their grace window."""
 	from frappe_whatsapp_openwa.utils.cron import acquire_cron_lock, release_cron_lock
 
-	if not acquire_cron_lock("heal_disconnected", ttl_seconds=55):
+	if not acquire_cron_lock("heal_disconnected", ttl_seconds=290):
 		return
 
 	try:
@@ -15,6 +15,13 @@ def heal_disconnected_sessions():
 
 
 def _do_heal():
+	try:
+		settings = frappe.get_single("OpenWA Gateway Settings")
+		if not settings.enable_openwa_provider:
+			return
+	except Exception:
+		return
+
 	now = frappe.utils.now()
 
 	# NULL disconnect_grace_until is treated as elapsed (reconnect immediately).
@@ -29,7 +36,6 @@ def _do_heal():
 
 	# Build a single HTTP client for all restart attempts in this tick —
 	# avoids opening a new TCP connection per session.
-	settings = frappe.get_single("OpenWA Gateway Settings")
 	import httpx
 	client = httpx.Client(
 		base_url=settings.gateway_base_url,

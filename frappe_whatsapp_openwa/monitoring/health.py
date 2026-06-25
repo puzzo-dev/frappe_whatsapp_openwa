@@ -2,7 +2,7 @@ import frappe
 
 
 def ping_all_sessions():
-	"""Safety-net poll: refresh session status from gateway every minute.
+	"""Safety-net poll: refresh session status from gateway every 5 minutes.
 
 	Uses a cron lock so overlapping scheduler runs don't cause concurrent
 	HTTP floods against the gateway. Sessions are pinged using a single
@@ -10,7 +10,7 @@ def ping_all_sessions():
 	"""
 	from frappe_whatsapp_openwa.utils.cron import acquire_cron_lock, release_cron_lock
 
-	if not acquire_cron_lock("ping_all_sessions", ttl_seconds=55):
+	if not acquire_cron_lock("ping_all_sessions", ttl_seconds=290):
 		return
 
 	try:
@@ -23,7 +23,7 @@ def _do_ping():
 	sessions = frappe.get_all(
 		"OpenWA Session",
 		filters={"status": ["!=", "Banned"]},
-		fields=["name", "gateway_session_id"],
+		fields=["name", "gateway_session_id", "status"],
 	)
 	if not sessions:
 		return
@@ -45,9 +45,11 @@ def _do_ping():
 	)
 
 	ttl = settings.session_health_ttl_seconds or 60
+	now = frappe.utils.now()
 
 	for session_info in sessions:
 		session_name = session_info["name"]
+		current_status = session_info.get("status")
 		gw_id = session_info.get("gateway_session_id") or session_name
 		try:
 			resp = client.get(f"/api/sessions/{gw_id}/status")
@@ -55,17 +57,16 @@ def _do_ping():
 			new_status = data.get("status")
 			qr = data.get("qrCode")
 
-			# Only load and save the doc if something changed — avoids
-			# unnecessary DB writes every minute when everything is stable.
-			doc = frappe.get_doc("OpenWA Session", session_name)
-			changed = new_status and new_status != doc.status
-			if changed:
-				doc.status = new_status
-				doc.last_state_change = frappe.utils.now()
+			# Build targeted update dict — avoids loading the full Document object
+			# and eliminates the N get_doc + N save pattern that was here before.
+			updates = {"last_health_check": now}
+			if new_status and new_status != current_status:
+				updates["status"] = new_status
+				updates["last_state_change"] = now
 			if new_status == "QR Required" and qr:
-				doc.qr_code_data = qr
-			doc.last_health_check = frappe.utils.now()
-			doc.save(ignore_permissions=True)
+				updates["qr_code_data"] = qr
+
+			frappe.db.set_value("OpenWA Session", session_name, updates, update_modified=False)
 
 			frappe.cache().setex(
 				f"openwa:session:status:{session_name}",

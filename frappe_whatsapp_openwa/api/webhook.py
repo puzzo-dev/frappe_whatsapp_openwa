@@ -7,6 +7,9 @@ import frappe
 _RATE_LIMIT_WINDOW = 60   # seconds
 _RATE_LIMIT_MAX = 200     # events per window per session
 
+# Maximum media file size re-hosted from the gateway into Frappe File storage.
+_MAX_MEDIA_BYTES = 50 * 1024 * 1024  # 50 MB
+
 
 @frappe.whitelist(allow_guest=True)
 def receive():
@@ -54,7 +57,6 @@ def receive():
 		log.error_message = frappe.get_traceback()[:1000]
 		log.save(ignore_permissions=True)
 
-	frappe.db.commit()
 	return {"status": "ok"}
 
 
@@ -105,7 +107,7 @@ def _handle_session(payload: dict, log) -> None:
 
 def _handle_inbound_message(payload: dict, log, settings) -> None:
 	from frappe_whatsapp_openwa.translators.webhook_normalizer import normalize_message_event
-	from frappe_whatsapp_openwa.utils.idempotency import is_duplicate, mark_processed
+	from frappe_whatsapp_openwa.utils.idempotency import claim_event
 
 	normalized = normalize_message_event(payload)
 	if normalized is None:
@@ -114,7 +116,7 @@ def _handle_inbound_message(payload: dict, log, settings) -> None:
 		return
 
 	message_id = normalized.get("message_id", "")
-	if is_duplicate("message", message_id):
+	if not claim_event("message", message_id):
 		log.processed = 1
 		log.error_message = "duplicate"
 		log.save(ignore_permissions=True)
@@ -151,8 +153,6 @@ def _handle_inbound_message(payload: dict, log, settings) -> None:
 	log.whatsapp_message_doc = msg_doc.name
 	log.save(ignore_permissions=True)
 
-	mark_processed("message", message_id)
-
 
 def _rehost_media(media_url: str, message_id: str, settings) -> str | None:
 	"""Download media from the OpenWA gateway and save it as a private Frappe File.
@@ -175,8 +175,32 @@ def _rehost_media(media_url: str, message_id: str, settings) -> str | None:
 			timeout=15.0,
 			follow_redirects=True,
 		)
-		resp = client.get(media_url)
-		resp.raise_for_status()
+
+		# Stream the download so we can abort before exhausting memory/disk if
+		# the gateway sends an oversized payload.
+		with client.stream("GET", media_url) as resp:
+			resp.raise_for_status()
+
+			declared_length = resp.headers.get("content-length")
+			if declared_length and int(declared_length) > _MAX_MEDIA_BYTES:
+				frappe.log_error(
+					title=f"OpenWA media re-host skipped: file too large for {message_id}",
+					message=f"Content-Length: {declared_length} bytes (limit {_MAX_MEDIA_BYTES})",
+				)
+				return None
+
+			chunks = []
+			downloaded = 0
+			for chunk in resp.iter_bytes(chunk_size=65_536):
+				downloaded += len(chunk)
+				if downloaded > _MAX_MEDIA_BYTES:
+					frappe.log_error(
+						title=f"OpenWA media re-host aborted: body exceeded limit for {message_id}",
+						message=f"Downloaded {downloaded} bytes before abort (limit {_MAX_MEDIA_BYTES})",
+					)
+					return None
+				chunks.append(chunk)
+			content = b"".join(chunks)
 
 		content_type = resp.headers.get("content-type", "application/octet-stream")
 		ext = _ext_from_content_type(content_type)
@@ -184,7 +208,7 @@ def _rehost_media(media_url: str, message_id: str, settings) -> str | None:
 
 		file_doc = save_file(
 			fname=filename,
-			content=resp.content,
+			content=content,
 			dt="WhatsApp Message",
 			dn=message_id,
 			is_private=1,

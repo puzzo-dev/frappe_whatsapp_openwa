@@ -193,34 +193,39 @@ class TestHandleAck(unittest.TestCase):
 # ─── Idempotency ─────────────────────────────────────────────────────────────
 
 class TestIdempotency(unittest.TestCase):
-	def test_existing_key_is_duplicate(self):
+	def test_claim_returns_false_when_key_exists(self):
+		"""SET NX returns None when the key already exists — claim_event returns False."""
 		frappe_mock = _make_frappe_mock()
-		frappe_mock.cache.return_value.exists.return_value = True
+		frappe_mock.cache.return_value.set.return_value = None  # key already present
 		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
-			from frappe_whatsapp_openwa.utils.idempotency import is_duplicate
-			self.assertTrue(is_duplicate("message", "wamid.abc"))
+			from frappe_whatsapp_openwa.utils.idempotency import claim_event
+			self.assertFalse(claim_event("message", "wamid.abc"))
 
-	def test_new_key_not_duplicate(self):
+	def test_claim_returns_true_for_new_key(self):
+		"""SET NX returns True when the key was freshly inserted."""
 		frappe_mock = _make_frappe_mock()
-		frappe_mock.cache.return_value.exists.return_value = False
+		frappe_mock.cache.return_value.set.return_value = True  # key was set
 		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
-			from frappe_whatsapp_openwa.utils.idempotency import is_duplicate
-			self.assertFalse(is_duplicate("message", "wamid.new"))
+			from frappe_whatsapp_openwa.utils.idempotency import claim_event
+			self.assertTrue(claim_event("message", "wamid.new"))
 
-	def test_empty_id_always_not_duplicate(self):
+	def test_empty_id_always_claimable(self):
+		"""Empty event_id has no deduplication — claim_event always returns True."""
 		frappe_mock = _make_frappe_mock()
 		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
-			from frappe_whatsapp_openwa.utils.idempotency import is_duplicate
-			self.assertFalse(is_duplicate("message", ""))
-		frappe_mock.cache.return_value.exists.assert_not_called()
+			from frappe_whatsapp_openwa.utils.idempotency import claim_event
+			self.assertTrue(claim_event("message", ""))
+		frappe_mock.cache.return_value.set.assert_not_called()
 
-	def test_mark_processed_sets_key_with_ttl(self):
+	def test_claim_uses_set_nx_with_ttl(self):
+		"""claim_event must call cache().set(key, '1', nx=True, ex=TTL) — single atomic call."""
 		frappe_mock = _make_frappe_mock()
+		frappe_mock.cache.return_value.set.return_value = True
 		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
-			from frappe_whatsapp_openwa.utils.idempotency import mark_processed
-			mark_processed("message", "wamid.x")
-		frappe_mock.cache.return_value.setex.assert_called_once_with(
-			"openwa:webhook:dedup:message:wamid.x", 86400, "1"
+			from frappe_whatsapp_openwa.utils.idempotency import claim_event
+			claim_event("message", "wamid.x")
+		frappe_mock.cache.return_value.set.assert_called_once_with(
+			"openwa:webhook:dedup:message:wamid.x", "1", nx=True, ex=86400
 		)
 
 

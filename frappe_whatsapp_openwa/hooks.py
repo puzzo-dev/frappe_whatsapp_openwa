@@ -34,11 +34,11 @@ doc_events = {
 scheduler_events = {
 	"cron": {
 		"* * * * *": [
-			"frappe_whatsapp_openwa.monitoring.health.ping_all_sessions",
-			"frappe_whatsapp_openwa.monitoring.self_healer.heal_disconnected_sessions",
 			"frappe_whatsapp_openwa.queue.worker.process_outbound_queue",
 		],
 		"*/5 * * * *": [
+			"frappe_whatsapp_openwa.monitoring.health.ping_all_sessions",
+			"frappe_whatsapp_openwa.monitoring.self_healer.heal_disconnected_sessions",
 			"frappe_whatsapp_openwa.monitoring.alerts.check_session_alerts",
 		],
 		"0 0 * * *": [
@@ -57,6 +57,10 @@ scheduler_events = {
 
 # ─── Fixtures ────────────────────────────────────────────────────────────
 fixtures = [
+	{
+		"doctype": "Role",
+		"filters": [["name", "in", ["OpenWA Manager"]]],
+	},
 	{
 		"doctype": "Notification",
 		"filters": [["module", "=", "WhatsApp Dual Gateway"]],
