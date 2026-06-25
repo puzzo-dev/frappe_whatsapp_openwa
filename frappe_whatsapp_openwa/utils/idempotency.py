@@ -2,6 +2,9 @@
 
 Key: openwa:webhook:dedup:{event_type}:{event_id}
 TTL: 86400 s (24 h)
+
+Single atomic operation via SET NX EX — eliminates the TOCTOU race that exists
+when is_duplicate() and mark_processed() are called as two separate operations.
 """
 
 from __future__ import annotations
@@ -12,16 +15,22 @@ _TTL = 86_400
 _PREFIX = "openwa:webhook:dedup"
 
 
-def is_duplicate(event_type: str, event_id: str) -> bool:
-	"""Return True if this (event_type, event_id) was already processed."""
-	if not event_id:
-		return False
-	key = f"{_PREFIX}:{event_type}:{event_id}"
-	return bool(frappe.cache().exists(key))
+def claim_event(event_type: str, event_id: str) -> bool:
+	"""Atomically claim this event for processing.
 
+	Uses Redis SET NX EX so the existence check and the write are a single
+	atomic command — no window exists for two concurrent callers to both
+	observe a missing key and both proceed.
 
-def mark_processed(event_type: str, event_id: str) -> None:
+	Returns True  — this call claimed the event; caller should process it.
+	Returns False — already claimed by a prior call; caller should skip (duplicate).
+
+	When event_id is empty, always returns True (no deduplication possible
+	without an ID — caller must handle at-least-once delivery itself).
+	"""
 	if not event_id:
-		return
+		return True
 	key = f"{_PREFIX}:{event_type}:{event_id}"
-	frappe.cache().setex(key, _TTL, "1")
+	# SET NX EX: returns True if the key was set, None if it already existed.
+	result = frappe.cache().set(key, "1", nx=True, ex=_TTL)
+	return result is not None

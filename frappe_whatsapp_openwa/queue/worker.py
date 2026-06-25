@@ -64,10 +64,9 @@ def _run_queue():
 
 
 def _process_row(row, now):
-	enqueued = frappe.utils.get_datetime(
-		frappe.db.get_value("WhatsApp Outbound Queue", row.name, "enqueued_at")
-	)
-	max_age = frappe.db.get_value("WhatsApp Outbound Queue", row.name, "max_age_minutes") or 15
+	# enqueued_at and max_age_minutes were already fetched in the initial batch SELECT.
+	enqueued = frappe.utils.get_datetime(row.enqueued_at)
+	max_age = row.max_age_minutes or 15
 	if (now - enqueued).total_seconds() / 60 > max_age:
 		frappe.db.set_value("WhatsApp Outbound Queue", row.name, "status", "Expired")
 		frappe.db.commit()
@@ -97,15 +96,18 @@ def _process_row(row, now):
 		   WHERE name = %s AND status = 'Queued'""",
 		[frappe.utils.now(), row.name],
 	)
+	# ROW_COUNT() reflects the immediately preceding UPDATE in this connection —
+	# no separate SELECT needed, and no race window between claim and verification.
+	claimed = frappe.db.sql("SELECT ROW_COUNT()", as_list=True)[0][0]
 	frappe.db.commit()
 
-	if frappe.db.get_value("WhatsApp Outbound Queue", row.name, "status") != "Sending":
+	if not claimed:
 		return  # Another worker won the race
 
 	payload = frappe.parse_json(
 		frappe.db.get_value("WhatsApp Outbound Queue", row.name, "payload") or "{}"
 	)
-	attempts = frappe.db.get_value("WhatsApp Outbound Queue", row.name, "attempts") or 1
+	attempts = (row.attempts or 0) + 1  # Incremented by the claim UPDATE above
 
 	try:
 		result = _dispatch(row, payload)

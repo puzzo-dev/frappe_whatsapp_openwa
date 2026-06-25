@@ -1,0 +1,12 @@
+[
+  {
+    "doctype": "Role",
+    "name": "OpenWA Manager",
+    "role_name": "OpenWA Manager",
+    "desk_access": 1,
+    "is_custom": 1,
+    "disabled": 0,
+    "two_factor_auth": 0,
+    "restrict_to_domain": ""
+  }
+]

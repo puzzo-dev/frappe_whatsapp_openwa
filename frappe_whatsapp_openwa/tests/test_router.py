@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from frappe_whatsapp_openwa.providers.base import OpenWASessionDown, SendResult
+from frappe_whatsapp_openwa.providers.base import OpenWAClientError, OpenWASessionDown, SendResult
 from frappe_whatsapp_openwa.routing.router import route_send_text
 
 
@@ -98,3 +98,25 @@ class TestRouteSendText:
 				result = route_send_text("Test Account", "+234", "Hello")
 			assert result.success is False
 			assert result.provider == "openwa"
+
+	def test_client_error_triggers_fallback(self):
+		"""OpenWAClientError (4xx) must be caught by _OPENWA_ERRORS and fall back to Meta."""
+		meta_fn = MagicMock(return_value=_ok("meta"))
+		with patch("frappe_whatsapp_openwa.providers.openwa.OpenWAAdapter.send_text") as mock_send:
+			mock_send.side_effect = OpenWAClientError("401 Unauthorized")
+			ext = MagicMock()
+			ext.auto_fallback_provider = "Meta Cloud API"
+
+			with (
+				patch("frappe_whatsapp_openwa.routing.router.resolve_provider", return_value=("openwa", "sess-1")),
+				patch("frappe_whatsapp_openwa.routing.router.frappe.get_doc", return_value=ext),
+				patch("frappe_whatsapp_openwa.routing.router.frappe.get_single", return_value=MagicMock(
+					gateway_base_url="http://t", get_password=lambda x: "k"
+				)),
+				patch("frappe_whatsapp_openwa.routing.router.frappe.log_error"),
+				patch("frappe_whatsapp_openwa.routing.router.should_fallback", return_value=True),
+				patch("frappe_whatsapp_openwa.routing.router.run_fallback", return_value=_ok("meta")) as mock_fallback,
+			):
+				result = route_send_text("Test Account", "+234", "Hello", meta_fallback_fn=meta_fn)
+			mock_fallback.assert_called_once()
+			assert result.provider == "meta"

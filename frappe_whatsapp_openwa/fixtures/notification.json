@@ -82,5 +82,45 @@
     ],
     "message": "The OpenWA session <b>{{ doc.session_name }}</b> ({{ doc.phone_number }}) failed to auto-restart after {{ doc.restart_attempt_count }} attempts.\n\nManual intervention is required. Please check the OpenWA gateway status and restart the session manually.\n\n<a href=\"{{ frappe.utils.get_url() }}/app/openwa-session/{{ doc.name }}\">View Session</a>",
     "channel": "Email"
+  },
+  {
+    "name": "openwa-dead-letter-alert",
+    "doctype": "Notification",
+    "subject": "WhatsApp Dead Letter: {{ doc.recipient_phone }} via {{ doc.whatsapp_account }}",
+    "document_type": "WhatsApp Fallback Log",
+    "event": "Custom",
+    "condition": "",
+    "module": "WhatsApp Dual Gateway",
+    "enabled": 1,
+    "is_standard": 1,
+    "send_to_all_assignees": 0,
+    "channel": "Email",
+    "recipients": [
+      {
+        "doctype": "Notification Recipient",
+        "receiver_by_role": "System Manager"
+      }
+    ],
+    "message": "<p>A WhatsApp message has permanently failed after exhausting all retries.</p><table border=\"1\" cellpadding=\"4\"><tr><th>Field</th><th>Value</th></tr><tr><td>Log</td><td>{{ doc.name }}</td></tr><tr><td>Account</td><td>{{ doc.whatsapp_account }}</td></tr><tr><td>Recipient</td><td>{{ doc.recipient_phone }}</td></tr><tr><td>Reason</td><td>{{ doc.failure_reason }}</td></tr><tr><td>Time</td><td>{{ doc.triggered_at }}</td></tr></table><p>Review and retry from <a href=\"{{ frappe.utils.get_url() }}/app/whatsapp-fallback-log/{{ doc.name }}\">WhatsApp Fallback Log</a>.</p>"
+  },
+  {
+    "name": "openwa-counter-reset-failed",
+    "doctype": "Notification",
+    "subject": "ALERT: OpenWA Daily Counter Reset Failed",
+    "document_type": "OpenWA Gateway Settings",
+    "event": "Custom",
+    "condition": "",
+    "module": "WhatsApp Dual Gateway",
+    "enabled": 1,
+    "is_standard": 1,
+    "send_to_all_assignees": 0,
+    "channel": "Email",
+    "recipients": [
+      {
+        "doctype": "Notification Recipient",
+        "receiver_by_role": "System Manager"
+      }
+    ],
+    "message": "<p>The scheduled midnight reset of <b>messages_sent_today</b> on all OpenWA Sessions failed.</p><p>Sessions that have already reached their daily soft cap will continue to queue or fall back to Meta until the counters are manually reset.</p><p>Check the <a href=\"{{ frappe.utils.get_url() }}/app/error-log\">Error Log</a> for details.</p><p>To reset manually, run:<br><code>frappe.db.sql(\"UPDATE `tabOpenWA Session` SET messages_sent_today = 0\")</code></p>"
   }
 ]

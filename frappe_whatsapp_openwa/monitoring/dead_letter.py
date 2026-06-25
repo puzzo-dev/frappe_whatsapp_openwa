@@ -11,10 +11,16 @@ import frappe
 
 
 _REPORT_LOOKBACK_HOURS = 24
+_MAX_NOTIFICATIONS_PER_RUN = 10
 
 
 def report_recent_dead_letters():
-	"""Email administrators a summary of dead letters in the last 24 hours."""
+	"""Notify administrators of dead letters in the last 24 hours via Frappe Notifications.
+
+	Sends one notification per dead-letter record (capped at _MAX_NOTIFICATIONS_PER_RUN
+	to prevent alert floods). The 'openwa-dead-letter-alert' Notification handles
+	template rendering and recipient management.
+	"""
 	cutoff = frappe.utils.add_to_date(frappe.utils.now(), hours=-_REPORT_LOOKBACK_HOURS)
 	rows = frappe.get_all(
 		"WhatsApp Fallback Log",
@@ -22,50 +28,28 @@ def report_recent_dead_letters():
 			"triggered_at": [">=", cutoff],
 			"fallback_succeeded": 0,
 		},
-		fields=[
-			"name",
-			"whatsapp_account",
-			"recipient_phone",
-			"failure_reason",
-			"triggered_at",
-		],
+		fields=["name"],
 		order_by="triggered_at desc",
-		limit_page_length=100,
+		limit_page_length=_MAX_NOTIFICATIONS_PER_RUN,
 	)
 	if not rows:
 		return
 
-	admins = frappe.get_all(
-		"User",
-		filters={
-			"enabled": 1,
-			"name": ("in", frappe.get_all("Has Role", filters={"role": "System Manager"}, pluck="parent")),
-		},
-		pluck="email",
-	)
-	if not admins:
+	try:
+		notification = frappe.get_doc("Notification", "openwa-dead-letter-alert")
+	except frappe.DoesNotExistError:
+		frappe.log_error(
+			title="openwa-dead-letter-alert notification not found",
+			message="Ensure fixtures are loaded via bench migrate.",
+		)
 		return
 
-	rows_html = "\n".join(
-		f"<tr><td>{r.name}</td><td>{r.whatsapp_account}</td><td>{r.recipient_phone}</td>"
-		f"<td>{r.failure_reason}</td><td>{r.triggered_at}</td></tr>"
-		for r in rows
-	)
-	message = f"""<p>WhatsApp Dual Gateway dead-letter summary (last {_REPORT_LOOKBACK_HOURS} hours):</p>
-<table border="1" cellpadding="4">
-<tr><th>Log</th><th>Account</th><th>Recipient</th><th>Reason</th><th>Time</th></tr>
-{rows_html}
-</table>
-<p>Review and retry manually from WhatsApp Outbound Queue / WhatsApp Fallback Log.</p>"""
-
-	try:
-		frappe.sendmail(
-			recipients=admins,
-			subject=f"WhatsApp Dead-Letter Report ({len(rows)} items)",
-			message=message,
-		)
-	except Exception:
-		frappe.log_error(
-			title="WhatsApp dead-letter report failed",
-			message=frappe.get_traceback(),
-		)
+	for row in rows:
+		try:
+			doc = frappe.get_doc("WhatsApp Fallback Log", row.name)
+			notification.send(doc)
+		except Exception:
+			frappe.log_error(
+				title=f"Dead-letter alert failed for {row.name}",
+				message=frappe.get_traceback(),
+			)
