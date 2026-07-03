@@ -74,3 +74,8 @@ fixtures = [
 # ─── Boot ────────────────────────────────────────────────────────────────
 extend_bootinfo = "frappe_whatsapp_openwa.utils.boot.get_bootinfo"
 
+# ─── Uninstall cleanup ─────────────────────────────────────────────────────
+# Roles have no `module` link, so Frappe's module-based uninstall never removes
+# them. Sweep the app-owned role explicitly to avoid orphan residue.
+before_uninstall = "frappe_whatsapp_openwa.install.before_uninstall"
+
