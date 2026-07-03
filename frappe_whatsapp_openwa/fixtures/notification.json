@@ -9,7 +9,7 @@
     "condition": "doc.requires_human_attention == 1",
     "module": "WhatsApp Dual Gateway",
     "enabled": 1,
-    "is_standard": 1,
+    "is_standard": 0,
     "send_to_all_assignees": 0,
     "channel": "Email",
     "recipients": [
@@ -30,7 +30,7 @@
     "condition": "doc.status == 'Connected' and doc.requires_human_attention == 0",
     "module": "WhatsApp Dual Gateway",
     "enabled": 1,
-    "is_standard": 1,
+    "is_standard": 0,
     "send_to_all_assignees": 0,
     "recipients": [
       {
@@ -51,7 +51,7 @@
     "condition": "doc.status == 'Banned'",
     "module": "WhatsApp Dual Gateway",
     "enabled": 1,
-    "is_standard": 1,
+    "is_standard": 0,
     "send_to_all_assignees": 0,
     "recipients": [
       {
@@ -72,7 +72,7 @@
     "condition": "doc.status == 'Restart Failed'",
     "module": "WhatsApp Dual Gateway",
     "enabled": 1,
-    "is_standard": 1,
+    "is_standard": 0,
     "send_to_all_assignees": 0,
     "recipients": [
       {
@@ -92,7 +92,7 @@
     "condition": "",
     "module": "WhatsApp Dual Gateway",
     "enabled": 1,
-    "is_standard": 1,
+    "is_standard": 0,
     "send_to_all_assignees": 0,
     "channel": "Email",
     "recipients": [
@@ -112,7 +112,7 @@
     "condition": "",
     "module": "WhatsApp Dual Gateway",
     "enabled": 1,
-    "is_standard": 1,
+    "is_standard": 0,
     "send_to_all_assignees": 0,
     "channel": "Email",
     "recipients": [
