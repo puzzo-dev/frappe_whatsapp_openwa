@@ -31,7 +31,11 @@ class MetaAdapter(WhatsAppProvider):
 		doc.content_type = "text"
 		doc.whatsapp_account = account or self.account
 		try:
+			# send_outgoing is called as an unbound method with doc as self —
+			# this is intentional: the upstream method expects self to be a
+			# Document instance and operates on it directly.
 			_Upstream.send_outgoing(doc)
+			doc.insert(ignore_permissions=True)
 			return SendResult(
 				success=doc.status != "Failed",
 				provider="meta",
@@ -65,6 +69,7 @@ class MetaAdapter(WhatsAppProvider):
 		doc.whatsapp_account = account or self.account
 		try:
 			_Upstream.send_outgoing(doc)
+			doc.insert(ignore_permissions=True)
 			return SendResult(
 				success=doc.status != "Failed",
 				provider="meta",
@@ -92,6 +97,7 @@ class MetaAdapter(WhatsAppProvider):
 			doc.body_param = components["body_param"]
 		try:
 			_Upstream.send_outgoing(doc)
+			doc.insert(ignore_permissions=True)
 			return SendResult(
 				success=doc.status != "Failed",
 				provider="meta",

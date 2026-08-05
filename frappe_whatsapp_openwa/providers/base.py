@@ -21,6 +21,20 @@ class SessionStatus:
 	details: dict = field(default_factory=dict)
 
 
+# Gateway SessionStatus enum (lowercase, from the OpenWA gateway) → desk status
+# shown on the OpenWA Session doctype. Unknown values map to "Failed".
+GATEWAY_STATUS_MAP = {
+	"created": "Initializing",
+	"initializing": "Initializing",
+	"qr_ready": "QR Required",
+	"authenticating": "QR Required",
+	"ready": "Connected",
+	"disconnected": "Disconnected",
+	"action_required": "Failed",
+	"failed": "Failed",
+}
+
+
 class OpenWASessionDown(Exception):
 	pass
 

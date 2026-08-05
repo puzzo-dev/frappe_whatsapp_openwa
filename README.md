@@ -46,14 +46,16 @@ Queue / Fallback
 #### Outbound queue and dead letters
 
 - `WhatsApp Outbound Queue` stores messages with exponential backoff (`process_outbound_queue` runs every minute).
-- After the maximum number of retries, the message is moved to `WhatsApp Fallback Log` (dead-letter) and a daily report is emailed.
+- After the maximum number of retries, the message is moved to `WhatsApp Fallback Log` (dead-letter) and logged to the Error Log.
 - Old terminal queue rows and fallback logs are purged weekly by scheduled data-retention tasks.
 
 #### Monitoring
 
 - `monitoring/health.py` checks all OpenWA sessions periodically.
-- `monitoring/alerts.py` sends alerts when sessions are down or queues are backed up.
+- `monitoring/self_healer.py` restarts disconnected sessions automatically.
 - `monitoring/metrics.py` exposes a whitelisted API for gateway/session/queue metrics.
+- `monitoring/alerts.py` is intentionally a no-op — the extension does NOT auto-create Frappe Notifications. Users set up their own alerts linked to the OpenWA Session doctype.
+- `monitoring/dead_letter.py` logs dead letters to the Error Log. Users set up their own Frappe Notification records if they want email alerts.
 
 ### Installation
 
@@ -69,7 +71,9 @@ bench install-app frappe_whatsapp_openwa
 
 - Add `sentry_dsn` to `site_config.json` and install `sentry-sdk` to enable structured error reporting.
 - Configure `OpenWA Gateway Settings` (base URL, API key, rate limits, fallback email).
-- Configure `WhatsApp Account Provider Extension` per account (provider, session, queue, cap).
+- Configure `WhatsApp Account Provider Extension` per account (provider, routing mode, queue, cap).
+- Link one or more `OpenWA Session` records to each WhatsApp Account. Flag one as `is_default` for the default sending strategy.
+- Set `custom_session_strategy` on `WhatsApp Templates` to choose "Default Session" or "Random Session" for per-template session selection.
 
 ### Contributing
 

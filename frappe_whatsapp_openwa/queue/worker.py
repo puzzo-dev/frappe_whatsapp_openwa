@@ -75,8 +75,19 @@ def _process_row(row, now):
 	from frappe_whatsapp_openwa.routing.resolver import resolve_provider
 	from frappe_whatsapp_openwa.utils.cache import is_session_alive
 
+	session_strategy = None
+	payload = frappe.parse_json(
+		frappe.db.get_value("WhatsApp Outbound Queue", row.name, "payload") or "{}"
+	)
+	if row.message_type == "template":
+		tpl = (payload or {}).get("template")
+		if tpl:
+			session_strategy = frappe.db.get_value(
+				"WhatsApp Templates", tpl, "custom_session_strategy"
+			) or None
+
 	try:
-		provider, session_name = resolve_provider(row.account, row.requested_provider)
+		provider, session_name = resolve_provider(row.account, row.requested_provider, session_strategy)
 	except Exception:
 		provider, session_name = "meta", None
 
@@ -104,13 +115,10 @@ def _process_row(row, now):
 	if not claimed:
 		return  # Another worker won the race
 
-	payload = frappe.parse_json(
-		frappe.db.get_value("WhatsApp Outbound Queue", row.name, "payload") or "{}"
-	)
 	attempts = (row.attempts or 0) + 1  # Incremented by the claim UPDATE above
 
 	try:
-		result = _dispatch(row, payload)
+		result = _dispatch(row, payload, session_strategy)
 		if result.success:
 			frappe.db.set_value("WhatsApp Outbound Queue", row.name, {
 				"status": "Sent",
@@ -184,7 +192,7 @@ def _cap_reached(session_name: str) -> bool:
 	return cap > 0 and (row.messages_sent_today or 0) >= cap
 
 
-def _dispatch(row, payload: dict):
+def _dispatch(row, payload: dict, session_strategy: str | None = None):
 	from frappe_whatsapp_openwa.routing.router import route_send_media, route_send_text
 
 	msg_type = row.message_type or "text"
@@ -194,6 +202,7 @@ def _dispatch(row, payload: dict):
 			to=row.recipient,
 			body=payload.get("body", ""),
 			requested_provider=row.requested_provider,
+			session_strategy=session_strategy,
 		)
 	elif msg_type in ("image", "document", "video", "audio"):
 		return route_send_media(
@@ -203,6 +212,7 @@ def _dispatch(row, payload: dict):
 			caption=payload.get("caption"),
 			media_type=msg_type,
 			requested_provider=row.requested_provider,
+			session_strategy=session_strategy,
 		)
 	else:
 		from frappe_whatsapp_openwa.providers.base import SendResult

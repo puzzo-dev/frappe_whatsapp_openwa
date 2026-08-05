@@ -42,13 +42,12 @@ def receive():
 	try:
 		if event.startswith("session."):
 			_handle_session(payload, log)
-		elif event in ("message", "message_create"):
+		elif event == "message.received":
 			_handle_inbound_message(payload, log, settings)
-		elif event in ("message.ack", "ack"):
+		elif event in ("message.ack", "message.failed"):
 			_handle_ack(payload, log)
-		else:
-			log.processed = 1
-			log.save(ignore_permissions=True)
+		elif event in ("ping", "test"):
+			return {"status": "ok", "message": "pong"}
 	except Exception:
 		frappe.log_error(
 			title=f"OpenWA webhook handler error [{event}]",
@@ -68,7 +67,10 @@ def _parse_and_verify(settings) -> dict:
 			frappe.AuthenticationError,
 		)
 	body = frappe.request.get_data()
+	# Gateway sends: X-OpenWA-Signature: sha256=<hex>
 	signature = (frappe.request.headers.get("X-OpenWA-Signature") or "").strip()
+	if signature.startswith("sha256="):
+		signature = signature[len("sha256="):]
 	expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 	if not hmac.compare_digest(signature, expected):
 		frappe.throw("Invalid webhook signature", frappe.AuthenticationError)
@@ -83,14 +85,15 @@ def _check_rate_limit(session_id: str) -> None:
 	"""
 	if not session_id:
 		return
-	key = f"openwa:webhook:ratelimit:{session_id}"
-	pipe = frappe.cache().pipeline()
+	# make_key prefixes the site's db_name so the counter is tenant-scoped.
+	key = frappe.cache.make_key(f"openwa:webhook:ratelimit:{session_id}")
+	pipe = frappe.cache.pipeline()
 	pipe.incr(key)
 	pipe.ttl(key)
 	count, ttl = pipe.execute()
 	if ttl < 0:
 		# Key exists but has no expiry (first call or expiry lost) — set it now.
-		frappe.cache().expire(key, _RATE_LIMIT_WINDOW)
+		frappe.cache.expire(key, _RATE_LIMIT_WINDOW)
 	if count > _RATE_LIMIT_MAX:
 		frappe.throw(
 			f"Rate limit exceeded for session {session_id}",
@@ -170,8 +173,12 @@ def _rehost_media(media_url: str, message_id: str, settings) -> str | None:
 		import httpx
 		from frappe.utils.file_manager import save_file
 
+		api_key = settings.get_password("gateway_api_key") or ""
 		client = httpx.Client(
-			headers={"Authorization": f"Bearer {settings.get_password('gateway_api_key')}"},
+			headers={
+				"X-API-Key": api_key,
+				"Authorization": f"Bearer {api_key}",
+			},
 			timeout=15.0,
 			follow_redirects=True,
 		)

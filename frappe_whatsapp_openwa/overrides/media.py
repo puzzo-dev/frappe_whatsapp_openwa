@@ -2,12 +2,18 @@ import frappe
 
 
 @frappe.whitelist()
-def send_media(account, to, media_url, caption=None, media_type="image", provider=None, **kwargs):
+def send_media(account, to, media_url, caption=None, media_type="image", provider=None, template=None, **kwargs):
 	"""Override for frappe_whatsapp.utils.send_media. Routes through dual-gateway stack."""
 	# Mirrors upstream: WhatsApp Message is restricted to System Manager.
 	frappe.has_permission("WhatsApp Message", "create", throw=True)
 
 	from frappe_whatsapp_openwa.routing.router import route_send_media
+
+	session_strategy = None
+	if template:
+		session_strategy = frappe.db.get_value(
+			"WhatsApp Templates", template, "custom_session_strategy"
+		) or None
 
 	result = route_send_media(
 		account_name=account,
@@ -16,6 +22,7 @@ def send_media(account, to, media_url, caption=None, media_type="image", provide
 		caption=caption,
 		media_type=media_type,
 		requested_provider=provider,
+		session_strategy=session_strategy,
 	)
 
 	if not result.success:

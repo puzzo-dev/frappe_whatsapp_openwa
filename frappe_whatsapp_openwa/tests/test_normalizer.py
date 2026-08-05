@@ -1,4 +1,9 @@
-"""Unit tests for translators/webhook_normalizer.py — pure functions, no Frappe."""
+"""Unit tests for translators/webhook_normalizer.py — pure functions, no Frappe.
+
+Payload shapes mirror the OpenWA gateway (rmyndharis/OpenWA) webhook events:
+message.received carries the full message object; message.ack carries
+{id, messageId, status, ack}.
+"""
 
 from __future__ import annotations
 
@@ -11,34 +16,38 @@ from frappe_whatsapp_openwa.translators.webhook_normalizer import (
 
 
 def _msg_payload(
-	event="message",
-	from_me=False,
-	msg_type="chat",
+	event="message.received",
+	msg_type="text",
 	body="Hello",
 	has_media=False,
-	media_url=None,
 	caption=None,
+	from_wa="2348012345678@c.us",
+	to_wa="2348099999999@c.us",
+	push_name="Alice",
+	is_group=False,
+	author=None,
+	msg_id="true_2348012345678@c.us_3EB0ABCDEF",
 ):
+	data = {
+		"id": msg_id,
+		"body": body,
+		"type": msg_type,
+		"timestamp": 1700000000,
+		"from": from_wa,
+		"to": to_wa,
+		"hasMedia": has_media,
+		"isGroup": is_group,
+		"kind": "group" if is_group else "individual",
+		"contact": {"id": from_wa, "pushName": push_name},
+	}
+	if author:
+		data["author"] = author
+	if caption is not None or has_media:
+		data["media"] = {"mimetype": "image/jpeg", "caption": caption} if caption else {"mimetype": "image/jpeg"}
 	return {
 		"event": event,
-		"sessionId": "tenant-2348099999999-0",
-		"data": {
-			"id": {
-				"_serialized": f"false_2348012345678@c.us_ABCDEF",
-				"fromMe": from_me,
-				"remote": "2348012345678@c.us",
-				"id": "ABCDEF",
-			},
-			"body": body,
-			"type": msg_type,
-			"timestamp": 1700000000,
-			"from": "2348012345678@c.us",
-			"to": "2348099999999@c.us",
-			"notifyName": "Alice",
-			"hasMedia": has_media,
-			"mediaUrl": media_url,
-			"caption": caption,
-		},
+		"sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
+		"data": data,
 	}
 
 
@@ -54,7 +63,7 @@ class TestNormalizeMessageEvent:
 		assert n["to"] == "+2348099999999"
 
 	def test_skips_own_outbound_echo(self):
-		n = normalize_message_event(_msg_payload(from_me=True))
+		n = normalize_message_event(_msg_payload(event="message.sent"))
 		assert n is None
 
 	def test_image_message(self):
@@ -62,13 +71,12 @@ class TestNormalizeMessageEvent:
 			msg_type="image",
 			body="",
 			has_media=True,
-			media_url="https://cdn.example.com/img.jpg",
 			caption="Look!",
 		))
 		assert n is not None
 		assert n["content_type"] == "image"
-		assert n["attach"] == "https://cdn.example.com/img.jpg"
 		assert n["message"] == "Look!"
+		assert n["_has_media"] is True
 
 	def test_base64_body_not_stored_as_message(self):
 		n = normalize_message_event(_msg_payload(
@@ -83,22 +91,37 @@ class TestNormalizeMessageEvent:
 		n = normalize_message_event(_msg_payload(
 			msg_type="document",
 			has_media=True,
-			media_url="https://cdn.example.com/file.pdf",
 		))
 		assert n is not None
 		assert n["content_type"] == "document"
 
-	def test_audio_ptt(self):
-		n = normalize_message_event(_msg_payload(msg_type="ptt", has_media=True))
+	def test_voice_note(self):
+		n = normalize_message_event(_msg_payload(msg_type="voice", has_media=True))
 		assert n is not None
 		assert n["content_type"] == "audio"
 
+	def test_group_message_uses_author_as_sender(self):
+		n = normalize_message_event(_msg_payload(
+			is_group=True,
+			from_wa="120363000000000000@g.us",
+			author="2348012345678@c.us",
+		))
+		assert n is not None
+		assert n["from"] == "+2348012345678"
+
+	def test_lid_sender_resolves_via_sender_phone(self):
+		payload = _msg_payload(from_wa="12345678@lid")
+		payload["data"]["senderPhone"] = "2348012345678"
+		n = normalize_message_event(payload)
+		assert n is not None
+		assert n["from"] == "+2348012345678"
+
 	def test_unknown_event_type_returns_none(self):
-		payload = {"event": "other.event", "data": {}}
+		payload = {"event": "group.join", "data": {}}
 		assert normalize_message_event(payload) is None
 
 	def test_missing_data_returns_none(self):
-		payload = {"event": "message"}
+		payload = {"event": "message.received"}
 		assert normalize_message_event(payload) is None
 
 	def test_profile_name_extracted(self):
@@ -107,42 +130,54 @@ class TestNormalizeMessageEvent:
 
 	def test_session_id_preserved(self):
 		n = normalize_message_event(_msg_payload())
-		assert n["_openwa_session_id"] == "tenant-2348099999999-0"
+		assert n["_openwa_session_id"] == "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a"
 
 	def test_message_id_extracted(self):
 		n = normalize_message_event(_msg_payload())
-		assert n["message_id"] == "ABCDEF"
+		assert n["message_id"] == "true_2348012345678@c.us_3EB0ABCDEF"
 
 
 class TestNormalizeAckEvent:
-	def _ack_payload(self, ack_int: int, msg_id="MSG001"):
+	def _ack_payload(self, status: str, msg_id="true_234@c.us_3EB0ABC"):
 		return {
 			"event": "message.ack",
-			"sessionId": "tenant-phone-0",
+			"sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
 			"data": {
-				"id": {"id": msg_id, "_serialized": f"true_xxx@c.us_{msg_id}"},
-				"ack": ack_int,
+				"id": "9f1c2e7a-2b3d-4c5e-8a91-0d1e2f3a4b5c",
+				"messageId": msg_id,
+				"status": status,
+				"ack": {"pending": 0, "sent": 1, "delivered": 2, "read": 3, "failed": -1}[status],
 			},
 		}
 
 	def test_read_ack(self):
-		result = normalize_ack_event(self._ack_payload(3))
+		result = normalize_ack_event(self._ack_payload("read"))
 		assert result is not None
 		assert result["ack_status"] == "Read"
-		assert result["message_id"] == "MSG001"
+		assert result["message_id"] == "true_234@c.us_3EB0ABC"
 
 	def test_delivered_ack(self):
-		result = normalize_ack_event(self._ack_payload(2))
+		result = normalize_ack_event(self._ack_payload("delivered"))
 		assert result["ack_status"] == "Delivered"
 
 	def test_sent_ack(self):
-		result = normalize_ack_event(self._ack_payload(1))
+		result = normalize_ack_event(self._ack_payload("sent"))
 		assert result["ack_status"] == "Sent"
 
-	def test_error_ack(self):
-		result = normalize_ack_event(self._ack_payload(-1))
-		assert result["ack_status"] == "Error"
+	def test_failed_event(self):
+		payload = self._ack_payload("failed")
+		payload["event"] = "message.failed"
+		result = normalize_ack_event(payload)
+		assert result["ack_status"] == "Failed"
+
+	def test_legacy_ack_int_fallback(self):
+		payload = {
+			"event": "message.ack",
+			"data": {"id": "msg-uuid", "messageId": "true_x@c.us_ABC", "ack": 3},
+		}
+		result = normalize_ack_event(payload)
+		assert result["ack_status"] == "Read"
 
 	def test_wrong_event_returns_none(self):
-		payload = {"event": "message", "data": {"id": {"id": "x"}, "ack": 1}}
+		payload = {"event": "message.received", "data": {"id": "x", "ack": 1}}
 		assert normalize_ack_event(payload) is None

@@ -30,7 +30,10 @@ def claim_event(event_type: str, event_id: str) -> bool:
 	"""
 	if not event_id:
 		return True
-	key = f"{_PREFIX}:{event_type}:{event_id}"
+	# make_key prefixes the site's db_name — raw SET has no wrapper equivalent
+	# for the atomic NX EX combination, and without the prefix keys leak
+	# across tenants on a multi-site bench.
+	key = frappe.cache.make_key(f"{_PREFIX}:{event_type}:{event_id}")
 	# SET NX EX: returns True if the key was set, None if it already existed.
-	result = frappe.cache().set(key, "1", nx=True, ex=_TTL)
+	result = frappe.cache.set(key, "1", nx=True, ex=_TTL)
 	return result is not None

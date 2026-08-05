@@ -3,98 +3,126 @@
 Pure function — no Frappe imports, no DB calls.
 Output maps 1-to-1 onto WhatsApp Message doctype fields so callers
 can do ``frappe.new_doc("WhatsApp Message").update(normalized).insert()``.
+
+Gateway payload reference (rmyndharis/OpenWA):
+
+message.received — data is the full message object:
+  id (string waMessageId, e.g. "true_2348...@c.us_3EB0ABCD"), from, to, body,
+  type (text|image|video|audio|voice|document|sticker|location|contact|call|
+        revoked|masked|unknown), timestamp (epoch seconds), isGroup, kind,
+  hasMedia, author (group sender), senderPhone, contact {id, name, pushName},
+  media {mimetype, filename?, data?, omitted?, sizeBytes?}
+
+message.ack / message.failed — data = {id, messageId, status, ack}
+  status is canonical: pending|sent|delivered|read|failed
 """
 
 from __future__ import annotations
 
-from typing import Literal
-
 _OPENWA_TO_CONTENT_TYPE: dict[str, str] = {
-	"chat": "text",
+	"text": "text",
 	"image": "image",
 	"video": "video",
 	"audio": "audio",
-	"ptt": "audio",
+	"voice": "audio",
 	"document": "document",
 	"sticker": "image",
-	"location": "text",
-	"vcard": "text",
+	"location": "location",
+	"contact": "contact",
+	"call": "text",
 	"revoked": "text",
+	"masked": "text",
+	"unknown": "text",
 }
+
+_ACK_STATUS_MAP: dict[str, str] = {
+	"pending": "Pending",
+	"sent": "Sent",
+	"delivered": "Delivered",
+	"read": "Read",
+	"failed": "Failed",
+}
+
+# Legacy integer ack values — used only when the canonical status is absent.
+_LEGACY_ACK_MAP = {-1: "Failed", 0: "Pending", 1: "Sent", 2: "Delivered", 3: "Read", 4: "Read"}
 
 
 def normalize_message_event(payload: dict) -> dict | None:
 	"""Return a normalized dict, or None if the event should be skipped."""
 	event = payload.get("event", "")
-	if event not in ("message", "message_create"):
+	if event != "message.received":
+		# message.sent is the echo of our own outbound sends — already recorded.
 		return None
 
-	data = payload.get("data") or payload.get("message") or {}
+	data = payload.get("data") or {}
 	if not data:
 		return None
 
-	msg_id_obj = data.get("id") or {}
-	from_me: bool = msg_id_obj.get("fromMe", False) if isinstance(msg_id_obj, dict) else False
-
-	# Skip echo of our own outbound messages (OpenWA mirrors them back)
-	if from_me and event == "message":
+	raw_id = str(data.get("id") or "")
+	if not raw_id:
 		return None
 
-	serialized_id: str = (
-		msg_id_obj.get("_serialized", "") if isinstance(msg_id_obj, dict) else str(msg_id_obj)
-	)
-	raw_id: str = (
-		msg_id_obj.get("id", serialized_id) if isinstance(msg_id_obj, dict) else serialized_id
-	)
+	is_group = bool(data.get("isGroup")) or data.get("kind") == "group"
+	# In groups, `from` is the group JID — the human sender is `author`.
+	sender_wa = (data.get("author") or "") if is_group else ""
+	if not sender_wa:
+		sender_wa = data.get("from") or ""
+	recipient_wa = data.get("to") or ""
 
-	sender_wa: str = data.get("from", "")
-	recipient_wa: str = data.get("to", "")
+	# @lid senders resolve to a phone via senderPhone when available.
+	if sender_wa.endswith("@lid") and data.get("senderPhone"):
+		sender_wa = data["senderPhone"]
 
-	sender_phone = _wa_to_phone(sender_wa)
-	recipient_phone = _wa_to_phone(recipient_wa)
-
-	msg_type = data.get("type", "chat")
+	msg_type = data.get("type") or "text"
 	content_type = _OPENWA_TO_CONTENT_TYPE.get(msg_type, "text")
 
 	body: str = data.get("body") or ""
-	caption: str = data.get("caption") or ""
-	has_media: bool = bool(data.get("hasMedia") or data.get("mediaUrl"))
-	media_url: str = data.get("mediaUrl") or (body if has_media and body.startswith("http") else "")
+	caption: str = ""
+	media = data.get("media") or {}
+	if isinstance(media, dict):
+		caption = media.get("caption") or ""
 
 	# When body is a data-URI (base64 blob), don't store it in `message`
 	message_text = "" if body.startswith("data:") else (body or caption)
 
+	contact = data.get("contact") or {}
+	profile_name = contact.get("pushName") or contact.get("name") or data.get("pushName") or ""
+
 	return {
 		"type": "Incoming",
 		"status": "Received",
-		"from": sender_phone,
-		"to": recipient_phone,
+		"from": _wa_to_phone(sender_wa),
+		"to": _wa_to_phone(recipient_wa),
 		"message": message_text,
 		"message_id": raw_id,
 		"content_type": content_type,
-		"attach": media_url or None,
-		"profile_name": data.get("notifyName") or data.get("pushName") or "",
-		"conversation_id": serialized_id,
+		"attach": None,
+		"profile_name": profile_name,
+		"conversation_id": data.get("chatId") or "",
 		"_openwa_session_id": payload.get("sessionId", ""),
 		"_raw_msg_type": msg_type,
+		"_has_media": bool(data.get("hasMedia")),
 	}
 
 
 def normalize_ack_event(payload: dict) -> dict | None:
-	"""Return {message_id, ack_status} for a message.ack event, or None."""
+	"""Return {message_id, ack_status} for a message.ack/message.failed event, or None."""
 	event = payload.get("event", "")
-	if event not in ("message.ack", "ack"):
+	if event not in ("message.ack", "message.failed"):
 		return None
 
 	data = payload.get("data") or {}
-	msg_id_obj = data.get("id") or {}
-	raw_id = msg_id_obj.get("id", "") if isinstance(msg_id_obj, dict) else str(msg_id_obj)
+	message_id = str(data.get("messageId") or data.get("id") or "")
+	if not message_id:
+		return None
 
-	ack_int = data.get("ack", -1)
-	ack_map = {-1: "Error", 0: "Pending", 1: "Sent", 2: "Delivered", 3: "Read", 4: "Played"}
-	ack_status = ack_map.get(ack_int, "Sent")
+	status = data.get("status")
+	if status:
+		ack_status = _ACK_STATUS_MAP.get(str(status).lower(), "Sent")
+	else:
+		ack_status = _LEGACY_ACK_MAP.get(data.get("ack", -1), "Sent")
 
-	return {"message_id": raw_id, "ack_status": ack_status}
+	return {"message_id": message_id, "ack_status": ack_status}
 
 
 def _wa_to_phone(wa_id: str) -> str:

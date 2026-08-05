@@ -46,11 +46,11 @@ class TestRouteSendText:
 			raise frappe.DoesNotExistError
 
 		cache_mock = MagicMock()
-		cache_mock.get.return_value = None
+		cache_mock.get_value.return_value = None
 
 		with (
 			patch("frappe_whatsapp_openwa.routing.resolver.frappe.get_doc", side_effect=_get_doc),
-			patch("frappe_whatsapp_openwa.routing.resolver.frappe.cache", return_value=cache_mock),
+			patch("frappe_whatsapp_openwa.routing.resolver.frappe.cache", cache_mock),
 			patch("frappe_whatsapp_openwa.routing.resolver._session_is_healthy", return_value=True),
 			patch("frappe_whatsapp_openwa.routing.router.resolve_provider", return_value=provider_result),
 			patch("frappe_whatsapp_openwa.routing.router.frappe.get_doc", side_effect=_get_doc),
