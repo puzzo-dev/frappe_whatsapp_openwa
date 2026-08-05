@@ -5,6 +5,7 @@ from typing import Literal
 import httpx
 
 from frappe_whatsapp_openwa.providers.base import (
+	GATEWAY_STATUS_MAP,
 	OpenWAClientError,
 	OpenWANetworkError,
 	OpenWARateLimited,
@@ -29,15 +30,18 @@ class OpenWAAdapter(WhatsAppProvider):
 		self.session_id = session_id
 		self._client = httpx.Client(
 			timeout=httpx.Timeout(connect=2.0, read=5.0, write=5.0, pool=2.0),
-			headers={"Authorization": f"Bearer {api_key}"},
+			headers={
+				"X-API-Key": api_key,
+				"Authorization": f"Bearer {api_key}",
+			},
 		)
 
 	# ── Public API ────────────────────────────────────────────────────────
 
 	@retry_on_network_error
 	def send_text(self, to: str, body: str, account: str) -> SendResult:
-		url = f"{self.base}/api/sessions/{self.session_id}/send-text"
-		resp = self._client.post(url, json={"to": to_wa_format(to), "body": body})
+		url = f"{self.base}/api/sessions/{self.session_id}/messages/send-text"
+		resp = self._client.post(url, json={"chatId": to_wa_format(to), "text": body})
 		self._raise_for_status(resp)
 		data = resp.json()
 		return SendResult(
@@ -58,12 +62,15 @@ class OpenWAAdapter(WhatsAppProvider):
 	) -> SendResult:
 		endpoint_map = {
 			"image": "send-image",
-			"document": "send-file",
+			"document": "send-document",
 			"video": "send-video",
 			"audio": "send-audio",
 		}
-		url = f"{self.base}/api/sessions/{self.session_id}/{endpoint_map.get(media_type, 'send-file')}"
-		payload: dict = {"to": to_wa_format(to), "url": media_url}
+		url = (
+			f"{self.base}/api/sessions/{self.session_id}/messages/"
+			f"{endpoint_map.get(media_type, 'send-document')}"
+		)
+		payload: dict = {"chatId": to_wa_format(to), "url": media_url}
 		if caption:
 			payload["caption"] = caption
 		resp = self._client.post(url, json=payload)
@@ -85,13 +92,13 @@ class OpenWAAdapter(WhatsAppProvider):
 
 	@retry_on_network_error
 	def get_session_status(self, session_id: str) -> SessionStatus:
-		url = f"{self.base}/api/sessions/{session_id}/status"
+		url = f"{self.base}/api/sessions/{session_id}"
 		resp = self._client.get(url)
 		self._raise_for_status(resp)
 		data = resp.json()
 		return SessionStatus(
-			status=data.get("status", "Unknown"),
-			qr_code=data.get("qrCode"),
+			status=GATEWAY_STATUS_MAP.get((data.get("status") or "").lower(), "Failed"),
+			qr_code=None,
 			details=data,
 		)
 

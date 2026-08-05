@@ -14,12 +14,13 @@ def acquire_cron_lock(lock_name: str, ttl_seconds: int = 55) -> bool:
 	ttl_seconds should be slightly less than the cron interval so the lock
 	expires before the next tick fires. Default 55 s suits * * * * * jobs.
 	"""
-	key = f"openwa:cronlock:{lock_name}"
+	# make_key prefixes the site's db_name so locks stay tenant-scoped;
 	# redis-py SET with nx=True and ex=ttl is atomic (single SETNX + EXPIRE).
-	acquired = frappe.cache().set(key, "1", ex=ttl_seconds, nx=True)
+	key = frappe.cache.make_key(f"openwa:cronlock:{lock_name}")
+	acquired = frappe.cache.set(key, "1", ex=ttl_seconds, nx=True)
 	return bool(acquired)
 
 
 def release_cron_lock(lock_name: str) -> None:
 	"""Release a cron lock before its TTL expires (optional — lock auto-expires)."""
-	frappe.cache().delete(f"openwa:cronlock:{lock_name}")
+	frappe.cache.delete_value(f"openwa:cronlock:{lock_name}")

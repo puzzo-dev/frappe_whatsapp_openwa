@@ -27,6 +27,7 @@ def route_send_text(
 	body: str,
 	requested_provider: str | None = None,
 	meta_fallback_fn: Callable[[], SendResult] | None = None,
+	session_strategy: str | None = None,
 ) -> SendResult:
 	"""Route a text message.
 
@@ -35,7 +36,7 @@ def route_send_text(
 	  super().send_outgoing() on the real doc instead of creating a throwaway.
 	  When called from the queue worker, leave None to use MetaAdapter.
 	"""
-	provider, session_name = resolve_provider(account_name, requested_provider)
+	provider, session_name = resolve_provider(account_name, requested_provider, session_strategy)
 	_meta = meta_fallback_fn or (lambda: MetaAdapter(account_name).send_text(to, body, account_name))
 	if provider == "meta":
 		return _meta()
@@ -54,11 +55,12 @@ def route_send_media(
 	media_type: Literal["image", "document", "video", "audio"],
 	requested_provider: str | None = None,
 	meta_fallback_fn: Callable[[], SendResult] | None = None,
+	session_strategy: str | None = None,
 ) -> SendResult:
 	_meta = meta_fallback_fn or (
 		lambda: MetaAdapter(account_name).send_media(to, media_url, caption, media_type, account_name)
 	)
-	provider, session_name = resolve_provider(account_name, requested_provider)
+	provider, session_name = resolve_provider(account_name, requested_provider, session_strategy)
 	if provider == "meta":
 		return _meta()
 	return _try_openwa_then_fallback(

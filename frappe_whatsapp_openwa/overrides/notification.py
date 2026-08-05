@@ -74,7 +74,10 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
 
         try:
             from frappe_whatsapp_openwa.routing.resolver import resolve_provider
-            provider, session_name = resolve_provider(account_name)
+            session_strategy = frappe.db.get_value(
+                "WhatsApp Templates", self.template, "custom_session_strategy"
+            ) or None
+            provider, session_name = resolve_provider(account_name, None, session_strategy)
         except Exception:
             frappe.log_error(
                 title="DualGateway Notification: resolver error — falling back to Meta",
@@ -94,16 +97,21 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
         params = _extract_params(data)
 
         from frappe_whatsapp_openwa.translators.template_flattener import flatten_template
+        from frappe_whatsapp_openwa.overrides.whatsapp_message import _extract_button_labels
         template_doc = frappe.get_doc("WhatsApp Templates", self.template)
         body = flatten_template(
             body=template_doc.template or "",
             parameters=params,
             header=template_doc.header or None,
             footer=template_doc.footer or None,
+            buttons=_extract_button_labels(template_doc) or None,
         )
 
         from frappe_whatsapp_openwa.routing.router import route_send_text
-        result = route_send_text(account_name=account_name, to=to, body=body)
+        result = route_send_text(
+            account_name=account_name, to=to, body=body,
+            session_strategy=session_strategy,
+        )
 
         if result.success:
             self._save_message_log(data, doc_data, account_name, result)

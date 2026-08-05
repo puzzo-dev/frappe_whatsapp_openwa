@@ -10,10 +10,12 @@
   "company",
   "phone_number",
   "linked_whatsapp_account",
+  "is_default",
   "gateway_session_id",
   "column_break_1",
   "status",
   "requires_human_attention",
+  "skip_auto_heal",
   "last_state_change",
   "last_health_check",
   "section_break_2",
@@ -27,8 +29,7 @@
   "restart_attempt_count",
   "consecutive_disconnect_count",
   "section_break_4",
-  "last_banned_at",
-  "replacement_sim_swapped_at"
+  "last_error"
  ],
  "fields": [
   {
@@ -57,6 +58,15 @@
    "options": "WhatsApp Account"
   },
   {
+   "default": "0",
+   "depends_on": "linked_whatsapp_account",
+   "description": "Use this session when the linked account sends via OpenWA. Only one session per account can be the default; setting it here clears it on the others.",
+   "fieldname": "is_default",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Default Session for Account"
+  },
+  {
    "fieldname": "gateway_session_id",
    "fieldtype": "Data",
    "label": "Gateway Session ID",
@@ -70,7 +80,7 @@
    "fieldname": "status",
    "fieldtype": "Select",
    "label": "Status",
-   "options": "Initializing\nQR Required\nConnected\nDisconnected\nRestart Failed\nBanned",
+   "options": "Initializing\nQR Required\nConnected\nDisconnected\nFailed",
    "default": "Initializing",
    "in_list_view": 1,
    "reqd": 1,
@@ -82,6 +92,12 @@
    "fieldtype": "Check",
    "label": "Requires Human Attention",
    "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "skip_auto_heal",
+   "fieldtype": "Check",
+   "label": "Skip Auto-Heal"
   },
   {
    "fieldname": "last_state_change",
@@ -158,22 +174,17 @@
   {
    "fieldname": "section_break_4",
    "fieldtype": "Section Break",
-   "label": "Ban Recovery"
+   "label": "Diagnostics"
   },
   {
-   "fieldname": "last_banned_at",
-   "fieldtype": "Datetime",
-   "label": "Last Banned At",
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
    "read_only": 1
-  },
-  {
-   "fieldname": "replacement_sim_swapped_at",
-   "fieldtype": "Datetime",
-   "label": "Replacement SIM Swapped At"
   }
  ],
  "links": [],
- "modified": "2026-06-22 00:00:00.000000",
+ "modified": "2026-08-04 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "WhatsApp Dual Gateway",
  "name": "OpenWA Session",

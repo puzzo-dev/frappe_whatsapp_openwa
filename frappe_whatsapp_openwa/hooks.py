@@ -10,6 +10,7 @@ required_apps = ["frappe_whatsapp"]
 override_doctype_class = {
 	"WhatsApp Message": "frappe_whatsapp_openwa.overrides.whatsapp_message.WhatsAppMessageDualGateway",
 	"WhatsApp Notification": "frappe_whatsapp_openwa.overrides.notification.WhatsAppNotificationDualGateway",
+	"WhatsApp Templates": "frappe_whatsapp_openwa.overrides.whatsapp_templates.WhatsAppTemplatesDualGateway",
 }
 
 # ─── Override any direct frappe.call() API usage of frappe_whatsapp utils ─
@@ -39,7 +40,6 @@ scheduler_events = {
 		"*/5 * * * *": [
 			"frappe_whatsapp_openwa.monitoring.health.ping_all_sessions",
 			"frappe_whatsapp_openwa.monitoring.self_healer.heal_disconnected_sessions",
-			"frappe_whatsapp_openwa.monitoring.alerts.check_session_alerts",
 		],
 		"0 0 * * *": [
 			"frappe_whatsapp_openwa.monitoring.counters.reset_daily_message_counts",
@@ -48,8 +48,6 @@ scheduler_events = {
 			"frappe_whatsapp_openwa.monitoring.counters.purge_old_webhook_logs",
 			"frappe_whatsapp_openwa.monitoring.counters.purge_old_outbound_queue_rows",
 			"frappe_whatsapp_openwa.monitoring.counters.purge_old_fallback_logs",
-		],
-		"0 9 * * *": [
 			"frappe_whatsapp_openwa.monitoring.dead_letter.report_recent_dead_letters",
 		],
 	},
@@ -60,10 +58,6 @@ fixtures = [
 	{
 		"doctype": "Role",
 		"filters": [["name", "in", ["OpenWA Manager"]]],
-	},
-	{
-		"doctype": "Notification",
-		"filters": [["module", "=", "WhatsApp Dual Gateway"]],
 	},
 	{
 		"doctype": "Custom Field",

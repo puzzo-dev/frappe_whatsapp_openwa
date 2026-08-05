@@ -17,7 +17,8 @@ def send_template_message(account, to, template_name, body_param=None, provider=
 	)
 	from frappe_whatsapp_openwa.routing.resolver import resolve_provider
 
-	resolved_provider, session_name = resolve_provider(account, provider)
+	template_strategy = frappe.db.get_value("WhatsApp Templates", template_name, "custom_session_strategy") or None
+	resolved_provider, session_name = resolve_provider(account, provider, template_strategy)
 
 	if resolved_provider == "meta":
 		# Let the doctype lifecycle handle Meta template sends.
@@ -49,6 +50,7 @@ def send_template_message(account, to, template_name, body_param=None, provider=
 		to=to,
 		body=text,
 		requested_provider=provider,
+		session_strategy=template_strategy,
 	)
 	if not result.success:
 		frappe.throw(

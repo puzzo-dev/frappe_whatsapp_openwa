@@ -17,7 +17,7 @@ def _sign(body: bytes, secret: str = "test-secret") -> str:
 	return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
-def _payload_bytes(event: str = "message", session_id: str = "sess-001", **extra) -> bytes:
+def _payload_bytes(event: str = "message.received", session_id: str = "sess-001", **extra) -> bytes:
 	data = {"event": event, "sessionId": session_id, **extra}
 	return json.dumps(data).encode()
 
@@ -33,9 +33,11 @@ def _make_frappe_mock(secret: str = "test-secret") -> MagicMock:
 	pipe = MagicMock()
 	pipe.execute.return_value = (1, 60)   # count=1, ttl=60
 	cache.pipeline.return_value = pipe
-	cache.get.return_value = None
+	cache.get_value.return_value = None
 	cache.exists.return_value = False
-	m.cache.return_value = cache
+	# make_key prefixes db_name in production; identity here keeps assertions readable.
+	cache.make_key = lambda key, **kw: key
+	m.cache = cache
 
 	m.parse_json.side_effect = json.loads
 	m.as_json.side_effect = json.dumps
@@ -71,10 +73,17 @@ class TestParseAndVerify(unittest.TestCase):
 			return _parse_and_verify(frappe_mock.get_single.return_value), frappe_mock
 
 	def test_valid_signature_returns_parsed_payload(self):
-		body = _payload_bytes("session.connected")
+		body = _payload_bytes("session.authenticated")
 		sig = _sign(body)
 		result, _ = self._call(body, sig)
-		self.assertEqual(result["event"], "session.connected")
+		self.assertEqual(result["event"], "session.authenticated")
+
+	def test_sha256_prefixed_signature_accepted(self):
+		"""The gateway sends X-OpenWA-Signature: sha256=<hex> — the prefix must be stripped."""
+		body = _payload_bytes("session.status")
+		sig = f"sha256={_sign(body)}"
+		result, _ = self._call(body, sig)
+		self.assertEqual(result["event"], "session.status")
 
 	def test_missing_secret_throws(self):
 		body = _payload_bytes()
@@ -106,7 +115,7 @@ class TestParseAndVerify(unittest.TestCase):
 class TestCheckRateLimit(unittest.TestCase):
 	def _run(self, count: int, ttl: int, session_id: str = "sess-001"):
 		frappe_mock = _make_frappe_mock()
-		pipe = frappe_mock.cache.return_value.pipeline.return_value
+		pipe = frappe_mock.cache.pipeline.return_value
 		pipe.execute.return_value = (count, ttl)
 		with patch("frappe_whatsapp_openwa.api.webhook.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.api.webhook import _check_rate_limit
@@ -118,7 +127,7 @@ class TestCheckRateLimit(unittest.TestCase):
 
 	def test_over_limit_raises(self):
 		frappe_mock = _make_frappe_mock()
-		pipe = frappe_mock.cache.return_value.pipeline.return_value
+		pipe = frappe_mock.cache.pipeline.return_value
 		pipe.execute.return_value = (201, 45)
 		with patch("frappe_whatsapp_openwa.api.webhook.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.api.webhook import _check_rate_limit
@@ -128,18 +137,18 @@ class TestCheckRateLimit(unittest.TestCase):
 	def test_no_ttl_sets_expire(self):
 		"""When key has no TTL (ttl == -1), expire() must be called."""
 		m = self._run(count=1, ttl=-1)
-		m.cache.return_value.expire.assert_called_once()
+		m.cache.expire.assert_called_once()
 
 	def test_positive_ttl_does_not_set_expire(self):
 		m = self._run(count=1, ttl=55)
-		m.cache.return_value.expire.assert_not_called()
+		m.cache.expire.assert_not_called()
 
 	def test_empty_session_id_skips_pipeline(self):
 		frappe_mock = _make_frappe_mock()
 		with patch("frappe_whatsapp_openwa.api.webhook.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.api.webhook import _check_rate_limit
 			_check_rate_limit("")  # must not raise
-		frappe_mock.cache.return_value.pipeline.assert_not_called()
+		frappe_mock.cache.pipeline.assert_not_called()
 
 
 # ─── Content-type → extension ────────────────────────────────────────────────
@@ -170,7 +179,7 @@ class TestHandleAck(unittest.TestCase):
 		payload = {
 			"event": "message.ack",
 			"sessionId": "sess-001",
-			"data": {"id": {"id": "wamid.abc"}, "ack": 3},
+			"data": {"id": "msg-uuid", "messageId": "wamid.abc", "status": "read", "ack": 3},
 		}
 		with patch("frappe_whatsapp_openwa.api.webhook.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.api.webhook import _handle_ack
@@ -183,7 +192,10 @@ class TestHandleAck(unittest.TestCase):
 		frappe_mock = _make_frappe_mock()
 		frappe_mock.db.get_value.return_value = None
 		log = MagicMock()
-		payload = {"event": "message.ack", "data": {"id": {"id": "nope"}, "ack": 1}}
+		payload = {
+			"event": "message.ack",
+			"data": {"id": "msg-uuid", "messageId": "nope", "status": "sent", "ack": 1},
+		}
 		with patch("frappe_whatsapp_openwa.api.webhook.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.api.webhook import _handle_ack
 			_handle_ack(payload, log)
@@ -196,7 +208,7 @@ class TestIdempotency(unittest.TestCase):
 	def test_claim_returns_false_when_key_exists(self):
 		"""SET NX returns None when the key already exists — claim_event returns False."""
 		frappe_mock = _make_frappe_mock()
-		frappe_mock.cache.return_value.set.return_value = None  # key already present
+		frappe_mock.cache.set.return_value = None  # key already present
 		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.utils.idempotency import claim_event
 			self.assertFalse(claim_event("message", "wamid.abc"))
@@ -204,7 +216,7 @@ class TestIdempotency(unittest.TestCase):
 	def test_claim_returns_true_for_new_key(self):
 		"""SET NX returns True when the key was freshly inserted."""
 		frappe_mock = _make_frappe_mock()
-		frappe_mock.cache.return_value.set.return_value = True  # key was set
+		frappe_mock.cache.set.return_value = True  # key was set
 		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.utils.idempotency import claim_event
 			self.assertTrue(claim_event("message", "wamid.new"))
@@ -215,16 +227,16 @@ class TestIdempotency(unittest.TestCase):
 		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.utils.idempotency import claim_event
 			self.assertTrue(claim_event("message", ""))
-		frappe_mock.cache.return_value.set.assert_not_called()
+		frappe_mock.cache.set.assert_not_called()
 
 	def test_claim_uses_set_nx_with_ttl(self):
-		"""claim_event must call cache().set(key, '1', nx=True, ex=TTL) — single atomic call."""
+		"""claim_event must call cache.set(key, '1', nx=True, ex=TTL) — single atomic call."""
 		frappe_mock = _make_frappe_mock()
-		frappe_mock.cache.return_value.set.return_value = True
+		frappe_mock.cache.set.return_value = True
 		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.utils.idempotency import claim_event
 			claim_event("message", "wamid.x")
-		frappe_mock.cache.return_value.set.assert_called_once_with(
+		frappe_mock.cache.set.assert_called_once_with(
 			"openwa:webhook:dedup:message:wamid.x", "1", nx=True, ex=86400
 		)
 

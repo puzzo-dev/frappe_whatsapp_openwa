@@ -22,68 +22,77 @@ def _do_heal():
 	except Exception:
 		return
 
-	now = frappe.utils.now()
-
-	# NULL disconnect_grace_until is treated as elapsed (reconnect immediately).
-	candidates = frappe.db.sql(
-		"""SELECT name FROM `tabOpenWA Session`
-		   WHERE status = 'Disconnected'
-		   AND (restart_attempt_count IS NULL OR restart_attempt_count < 3)
-		   AND (disconnect_grace_until IS NULL OR disconnect_grace_until <= %s)""",
-		now,
-		as_dict=True,
+	now = frappe.utils.now_datetime()
+	sessions = frappe.get_all(
+		"OpenWA Session",
+		filters={
+			"status": "Disconnected",
+			"gateway_session_id": ["is", "set"],
+			"skip_auto_heal": 0,
+		},
+		fields=["name", "gateway_session_id", "restart_attempt_count", "disconnect_grace_until"],
 	)
+	if not sessions:
+		return
 
-	# Build a single HTTP client for all restart attempts in this tick —
-	# avoids opening a new TCP connection per session.
-	import httpx
-	client = httpx.Client(
-		base_url=settings.gateway_base_url,
-		headers={"Authorization": f"Bearer {settings.get_password('gateway_api_key')}"},
-		timeout=5.0,
-	)
+	from frappe_whatsapp_openwa.utils.gateway import get_gateway_client
 
-	for row in candidates:
-		name = row["name"]
-		session = frappe.get_doc("OpenWA Session", name)
+	client = get_gateway_client(timeout=35.0)
 
-		# Increment BEFORE attempting restart so a permanently-down gateway
-		# still advances the counter and eventually escalates to Restart Failed.
-		session.restart_attempt_count = (session.restart_attempt_count or 0) + 1
-		session.last_state_change = frappe.utils.now()
+	MAX_RESTART_ATTEMPTS = 3
+
+	for s in sessions:
+		# Grace period: don't restart immediately on disconnect
+		grace = s.disconnect_grace_until
+		if grace and now < frappe.utils.get_datetime(grace):
+			continue
+
+		attempts = s.restart_attempt_count or 0
+		if attempts >= MAX_RESTART_ATTEMPTS:
+			frappe.db.set_value(
+				"OpenWA Session",
+				s.name,
+				{
+					"status": "Failed",
+					"requires_human_attention": 1,
+					"last_state_change": now,
+				},
+				update_modified=False,
+			)
+			continue
 
 		try:
-			_issue_restart(session, client)
+			if _restart_on_gateway(client, s.gateway_session_id):
+				frappe.db.set_value(
+					"OpenWA Session",
+					s.name,
+					{
+						"restart_attempt_count": attempts + 1,
+						"last_restart_at": now,
+					},
+					update_modified=False,
+				)
 		except Exception as e:
 			frappe.log_error(
-				f"Self-heal restart failed for {name} (attempt {session.restart_attempt_count}): {e}",
+				f"OpenWA auto-restart failed for {s.name} (attempt {attempts + 1}): {e}",
 				"OpenWA Self-Healer",
 			)
 
-		session.save(ignore_permissions=True)
 
-	# Sessions that exhausted their attempts → Restart Failed + human alert.
-	exhausted = frappe.get_all(
-		"OpenWA Session",
-		filters={"status": "Disconnected", "restart_attempt_count": [">=", 3]},
-		pluck="name",
-	)
-	for name in exhausted:
-		session = frappe.get_doc("OpenWA Session", name)
-		session.status = "Restart Failed"
-		session.requires_human_attention = 1
-		session.last_state_change = frappe.utils.now()
-		session.save(ignore_permissions=True)
+def _restart_on_gateway(client, gateway_session_id: str) -> bool:
+	"""Restart a session on the gateway. Returns True on success.
 
-
-def _issue_restart(session, client=None):
-	import httpx
-	if client is None:
-		settings = frappe.get_single("OpenWA Gateway Settings")
-		client = httpx.Client(
-			base_url=settings.gateway_base_url,
-			headers={"Authorization": f"Bearer {settings.get_password('gateway_api_key')}"},
-			timeout=5.0,
-		)
-	resp = client.post(f"/api/sessions/{session.gateway_session_id}/restart")
-	resp.raise_for_status()
+	The gateway has no /restart route: POST /:id/start boots a stopped engine
+	(400 when one is already loaded), so a loaded-but-disconnected engine is
+	first stopped, then started.
+	"""
+	resp = client.post(f"/api/sessions/{gateway_session_id}/start")
+	if resp.status_code == 200:
+		return True
+	if resp.status_code == 400:
+		# Engine still loaded — stop it, then start again.
+		stop = client.post(f"/api/sessions/{gateway_session_id}/stop")
+		if stop.status_code != 200:
+			return False
+		return client.post(f"/api/sessions/{gateway_session_id}/start").status_code == 200
+	return False

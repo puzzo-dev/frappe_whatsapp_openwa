@@ -77,7 +77,12 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 
 		try:
 			from frappe_whatsapp_openwa.routing.resolver import resolve_provider
-			provider, session_name = resolve_provider(self.whatsapp_account)
+			session_strategy = None
+			if self.template:
+				session_strategy = frappe.db.get_value(
+					"WhatsApp Templates", self.template, "custom_session_strategy"
+				) or None
+			provider, session_name = resolve_provider(self.whatsapp_account, None, session_strategy)
 		except Exception:
 			frappe.log_error(
 				title="DualGateway: resolver error — falling back to Meta",
@@ -102,7 +107,7 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			return
 
 		if self.message_type == "Template" or self.template:
-			self._send_template_via_openwa(session_name)
+			self._send_template_via_openwa(session_name, session_strategy)
 		else:
 			self._send_text_via_openwa(session_name)
 
@@ -156,7 +161,7 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 
 	# ── OpenWA template path ─────────────────────────────────────────────
 
-	def _send_template_via_openwa(self, session_name: str | None) -> None:
+	def _send_template_via_openwa(self, session_name: str | None, session_strategy: str | None = None) -> None:
 		from frappe_whatsapp_openwa.routing.router import route_send_text
 		from frappe_whatsapp_openwa.translators.template_flattener import flatten_template
 
@@ -177,6 +182,7 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			to=self.to,
 			body=text,
 			meta_fallback_fn=self._meta_send_result,
+			session_strategy=session_strategy,
 		)
 		if result.success:
 			self.status = "Success"

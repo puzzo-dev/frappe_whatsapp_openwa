@@ -200,35 +200,41 @@ class TestDispatch(unittest.TestCase):
 # ─── Cron lock ───────────────────────────────────────────────────────────────
 
 class TestCronLock(unittest.TestCase):
-	def test_acquire_true_when_redis_set_succeeds(self):
+	def _frappe_mock(self):
 		frappe_mock = MagicMock()
-		frappe_mock.cache.return_value.set.return_value = True
+		# make_key prefixes db_name in production; identity here keeps assertions readable.
+		frappe_mock.cache.make_key = lambda key, **kw: key
+		return frappe_mock
+
+	def test_acquire_true_when_redis_set_succeeds(self):
+		frappe_mock = self._frappe_mock()
+		frappe_mock.cache.set.return_value = True
 		with patch("frappe_whatsapp_openwa.utils.cron.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.utils.cron import acquire_cron_lock
 			self.assertTrue(acquire_cron_lock("test"))
 
 	def test_acquire_false_when_key_exists(self):
-		frappe_mock = MagicMock()
-		frappe_mock.cache.return_value.set.return_value = None  # Redis NX returns nil
+		frappe_mock = self._frappe_mock()
+		frappe_mock.cache.set.return_value = None  # Redis NX returns nil
 		with patch("frappe_whatsapp_openwa.utils.cron.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.utils.cron import acquire_cron_lock
 			self.assertFalse(acquire_cron_lock("test"))
 
 	def test_acquire_uses_nx_and_ex(self):
-		frappe_mock = MagicMock()
+		frappe_mock = self._frappe_mock()
 		with patch("frappe_whatsapp_openwa.utils.cron.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.utils.cron import acquire_cron_lock
 			acquire_cron_lock("mylock", ttl_seconds=30)
-		frappe_mock.cache.return_value.set.assert_called_once_with(
+		frappe_mock.cache.set.assert_called_once_with(
 			"openwa:cronlock:mylock", "1", ex=30, nx=True
 		)
 
 	def test_release_deletes_correct_key(self):
-		frappe_mock = MagicMock()
+		frappe_mock = self._frappe_mock()
 		with patch("frappe_whatsapp_openwa.utils.cron.frappe", frappe_mock):
 			from frappe_whatsapp_openwa.utils.cron import release_cron_lock
 			release_cron_lock("mylock")
-		frappe_mock.cache.return_value.delete.assert_called_once_with(
+		frappe_mock.cache.delete_value.assert_called_once_with(
 			"openwa:cronlock:mylock"
 		)
 
