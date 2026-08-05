@@ -95,11 +95,13 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
 
         from frappe_whatsapp_openwa.translators.template_flattener import flatten_template
         template_doc = frappe.get_doc("WhatsApp Templates", self.template)
+        button_labels = _extract_button_labels(data)
         body = flatten_template(
             body=template_doc.template or "",
             parameters=params,
             header=template_doc.header or None,
             footer=template_doc.footer or None,
+            buttons=button_labels,
         )
 
         from frappe_whatsapp_openwa.routing.router import route_send_text
@@ -229,3 +231,13 @@ def _extract_params(data: dict) -> list[str]:
         if component.get("type") == "body":
             return [p.get("text", "") for p in component.get("parameters", [])]
     return []
+
+
+def _extract_button_labels(data: dict) -> list[str]:
+    """Pull button labels from the Meta template component payload."""
+    labels = []
+    for component in (data.get("template") or {}).get("components", []):
+        if component.get("type") == "buttons":
+            for param in component.get("parameters", []):
+                labels.append(param.get("text", "") or param.get("payload", ""))
+    return labels

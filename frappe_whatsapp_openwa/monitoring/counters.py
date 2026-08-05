@@ -10,8 +10,8 @@ _FALLBACK_LOG_RETENTION_DAYS = 90
 def reset_daily_message_counts():
 	"""Midnight cron: zero out messages_sent_today on all sessions.
 
-	Sends an alert via Frappe Notification on failure so a missed reset
-	(which would lock all sessions at cap) is immediately visible.
+	Logs to Error Log on failure so a missed reset is visible in the desk
+	without sending email notifications.
 	"""
 	try:
 		frappe.db.sql("UPDATE `tabOpenWA Session` SET messages_sent_today = 0")
@@ -21,15 +21,6 @@ def reset_daily_message_counts():
 			title="OpenWA daily counter reset failed",
 			message=frappe.get_traceback(),
 		)
-		try:
-			notification = frappe.get_doc("Notification", "openwa-counter-reset-failed")
-			settings = frappe.get_single("OpenWA Gateway Settings")
-			notification.send(settings)
-		except Exception:
-			frappe.log_error(
-				title="OpenWA: failed to send reset-failure alert",
-				message=frappe.get_traceback(),
-			)
 
 
 def purge_old_webhook_logs():
