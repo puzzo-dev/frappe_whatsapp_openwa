@@ -1,8 +1,8 @@
 """Install / uninstall lifecycle for frappe_whatsapp_openwa.
 
 Frappe's uninstall automatically removes records whose `module` field matches
-this app's module ("WhatsApp Dual Gateway") — that covers our Custom Fields and
-Notifications (all module-tagged in fixtures) and every DocType this app owns.
+this app's module ("WhatsApp Dual Gateway") — that covers our Custom Fields
+and every DocType this app owns.
 
 Roles have no `module` link, so they are never swept by the module-based
 uninstall and must be removed explicitly here to avoid orphan residue.

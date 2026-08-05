@@ -2,7 +2,7 @@ import frappe
 
 
 @frappe.whitelist()
-def send_whatsapp_message(account, to, message, provider=None, **kwargs):
+def send_whatsapp_message(account, to, message, provider=None, session_strategy=None, **kwargs):
 	"""Override entry point for frappe_whatsapp.utils.send_whatsapp_message.
 
 	Routes through the dual-gateway stack. Falls back to Meta on any failure
@@ -18,6 +18,7 @@ def send_whatsapp_message(account, to, message, provider=None, **kwargs):
 		to=to,
 		body=message,
 		requested_provider=provider,
+		session_strategy=session_strategy,
 	)
 
 	if not result.success:
@@ -30,17 +31,21 @@ def send_whatsapp_message(account, to, message, provider=None, **kwargs):
 
 
 def validate_account(doc, method=None):
-	"""Prevent removing the OpenWA session from an extension that is actively routing."""
+	"""Prevent removing all OpenWA sessions from an account that is actively routing via OpenWA."""
 	try:
 		ext = frappe.get_doc("WhatsApp Account Provider Extension", doc.name)
 	except frappe.DoesNotExistError:
 		return
 
-	if ext.default_provider == "OpenWA" and not ext.openwa_session:
-		frappe.throw(
-			frappe._("Cannot set Default Provider to OpenWA without a linked OpenWA Session."),
-			title=frappe._("Configuration Error"),
+	if ext.default_provider == "OpenWA":
+		has_session = bool(ext.openwa_session) or frappe.db.exists(
+			"OpenWA Session", {"linked_whatsapp_account": doc.name}
 		)
+		if not has_session:
+			frappe.throw(
+				frappe._("Cannot set Default Provider to OpenWA without a linked OpenWA Session."),
+				title=frappe._("Configuration Error"),
+			)
 
 
 def ensure_extension_doc(doc, method=None):

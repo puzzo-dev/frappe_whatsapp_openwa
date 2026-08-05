@@ -28,6 +28,7 @@ def _do_heal():
 	candidates = frappe.db.sql(
 		"""SELECT name FROM `tabOpenWA Session`
 		   WHERE status = 'Disconnected'
+		   AND IFNULL(skip_auto_heal, 0) = 0
 		   AND (restart_attempt_count IS NULL OR restart_attempt_count < 3)
 		   AND (disconnect_grace_until IS NULL OR disconnect_grace_until <= %s)""",
 		now,
@@ -65,7 +66,7 @@ def _do_heal():
 	# Sessions that exhausted their attempts → Restart Failed + human alert.
 	exhausted = frappe.get_all(
 		"OpenWA Session",
-		filters={"status": "Disconnected", "restart_attempt_count": [">=", 3]},
+		filters={"status": "Disconnected", "restart_attempt_count": [">=", 3], "skip_auto_heal": 0},
 		pluck="name",
 	)
 	for name in exhausted:

@@ -46,14 +46,14 @@ Queue / Fallback
 #### Outbound queue and dead letters
 
 - `WhatsApp Outbound Queue` stores messages with exponential backoff (`process_outbound_queue` runs every minute).
-- After the maximum number of retries, the message is moved to `WhatsApp Fallback Log` (dead-letter) and a daily report is emailed.
+- After the maximum number of retries, the message is moved to `WhatsApp Fallback Log` (dead-letter) and logged to Error Log.
 - Old terminal queue rows and fallback logs are purged weekly by scheduled data-retention tasks.
 
 #### Monitoring
 
 - `monitoring/health.py` checks all OpenWA sessions periodically.
-- `monitoring/alerts.py` sends alerts when sessions are down or queues are backed up.
 - `monitoring/metrics.py` exposes a whitelisted API for gateway/session/queue metrics.
+- Session status changes are logged to Error Log — no email notifications are sent.
 
 ### Installation
 
@@ -68,7 +68,7 @@ bench install-app frappe_whatsapp_openwa
 ### Configuration
 
 - Add `sentry_dsn` to `site_config.json` and install `sentry-sdk` to enable structured error reporting.
-- Configure `OpenWA Gateway Settings` (base URL, API key, rate limits, fallback email).
+- Configure `OpenWA Gateway Settings` (base URL, API key, rate limits).
 - Configure `WhatsApp Account Provider Extension` per account (provider, session, queue, cap).
 
 ### Contributing
