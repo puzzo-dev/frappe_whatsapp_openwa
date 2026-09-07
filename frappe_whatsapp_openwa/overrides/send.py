@@ -11,6 +11,12 @@ def send_whatsapp_message(account, to, message, provider=None, session_strategy=
 	# Mirrors upstream: WhatsApp Message is restricted to System Manager.
 	frappe.has_permission("WhatsApp Message", "create", throw=True)
 
+	# The account is client-supplied: authorise it as an object, not just the
+	# doctype-wide create right (OWA-03).
+	from frappe_whatsapp_openwa.utils.authz import assert_can_send_from_account
+
+	assert_can_send_from_account(account)
+
 	from frappe_whatsapp_openwa.routing.router import route_send_text
 
 	result = route_send_text(

@@ -56,9 +56,25 @@ def _resolve(
 	requested_provider: str | None,
 	session_strategy: str | None = None,
 ) -> tuple[ProviderChoice, str | None]:
-	try:
-		ext = frappe.get_doc("WhatsApp Account Provider Extension", account_name)
-	except frappe.DoesNotExistError:
+	# get_doc would also load the enabled_providers child table, which routing
+	# never looks at. Only the scalars below are used, so read exactly those.
+	# (The resolved result is already cached for _RESOLVER_CACHE_TTL above, so
+	# this runs at most once per account per window — no second cache layer,
+	# which would only add another thing to invalidate.)
+	ext = frappe.db.get_value(
+		"WhatsApp Account Provider Extension",
+		account_name,
+		[
+			"name",
+			"default_provider",
+			"routing_mode_override",
+			"allow_message_level_override",
+			"openwa_session",
+			"linked_whatsapp_account",
+		],
+		as_dict=True,
+	)
+	if not ext:
 		return "meta", None
 
 	override = (ext.routing_mode_override or "").strip()
@@ -119,14 +135,25 @@ def _resolve_openwa(ext, session_strategy: str | None = None) -> tuple[ProviderC
 
 
 def _account_sessions(account: str) -> list[dict]:
-	"""All sessions linked to the account, healthy ones first."""
+	"""All sessions linked to the account, with their health.
+
+	`status` is selected here rather than left to _session_is_healthy, which
+	falls back to a full frappe.get_doc per session on a cache miss. With
+	several sessions on an account — the whole point of the multi-session
+	model — that was one document load per session on every resolution, to read
+	a single column this query can return for free.
+
+	Health precedence is unchanged: the freshly-polled Redis status wins, and
+	the stored status is the fallback.
+	"""
 	sessions = frappe.db.get_all(
 		"OpenWA Session",
 		filters={"linked_whatsapp_account": account},
-		fields=["name", "is_default"],
+		fields=["name", "is_default", "status"],
 	)
 	for s in sessions:
-		s["healthy"] = _session_is_healthy(s["name"])
+		cached = get_cached_session_status(s["name"])
+		s["healthy"] = (cached if cached is not None else s.get("status")) == "Connected"
 	return sessions
 
 

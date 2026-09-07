@@ -5,3 +5,16 @@
 tags
 node_modules
 __pycache__
+# Local AI assistant / editor config and skills — never committed.
+.agents/
+.claude/
+.codex/
+.cursor/
+.devin/
+.gemini/
+.kiro/
+.opencode/
+.pi/
+.trae/
+.trae-cn/
+.vscode/

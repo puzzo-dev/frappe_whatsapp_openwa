@@ -52,7 +52,12 @@ def provision_session(session_name: str) -> dict:
 
 
 def provision_session_async(session_name: str) -> None:
-	"""Background-job entry point — auto-provision after the doc is inserted."""
+	"""Background-job entry point — auto-provision after the doc is inserted.
+
+	On failure, sets ``last_error`` and ``requires_human_attention`` on the
+	session doc so the operator sees *why* no QR appeared, right on the form
+	— not just in Error Log.
+	"""
 	try:
 		doc = frappe.get_doc("OpenWA Session", session_name)
 		if doc.gateway_session_id:
@@ -64,6 +69,20 @@ def provision_session_async(session_name: str) -> None:
 			title=f"OpenWA auto-provision failed for {session_name}",
 			message=frappe.get_traceback(),
 		)
+		# Surface the failure on the doc itself.
+		try:
+			frappe.flags.openwa_sync = True
+			frappe.db.set_value(
+				"OpenWA Session",
+				session_name,
+				{
+					"last_error": str(frappe.get_traceback().split("\n")[-2] if frappe.get_traceback() else "Provisioning failed"),
+					"requires_human_attention": 1,
+				},
+				update_modified=False,
+			)
+		finally:
+			frappe.flags.openwa_sync = False
 
 
 def _do_provision(doc) -> dict:
@@ -110,7 +129,12 @@ def _do_provision(doc) -> dict:
 	doc.qr_code_data = qr
 	doc.last_error = remote.get("lastError") or ""
 	doc.last_state_change = frappe.utils.now()
-	doc.save(ignore_permissions=True)
+	# Sync path — bypass the manual-edit guard in validate().
+	frappe.flags.openwa_sync = True
+	try:
+		doc.save(ignore_permissions=True)
+	finally:
+		frappe.flags.openwa_sync = False
 
 	_publish_state(doc)
 
@@ -244,7 +268,12 @@ def deprovision_session(session_name: str) -> dict:
 	doc.last_error = ""
 	doc.restart_attempt_count = 0
 	doc.consecutive_disconnect_count = 0
-	doc.save(ignore_permissions=True)
+	# Sync path — bypass the manual-edit guard.
+	frappe.flags.openwa_sync = True
+	try:
+		doc.save(ignore_permissions=True)
+	finally:
+		frappe.flags.openwa_sync = False
 
 	from frappe_whatsapp_openwa.utils.cache import invalidate_session_status
 	invalidate_session_status(doc.name)

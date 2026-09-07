@@ -35,11 +35,28 @@ WEBHOOK_EVENTS = [
 ]
 
 
+# Clients are reused rather than rebuilt per call. Every call was opening a new
+# httpx.Client and never closing it, so each gateway request paid a fresh TCP
+# (and TLS) handshake and leaked a connection pool until garbage collection —
+# on the health poll that is one per session per five minutes, forever.
+#
+# The key includes the site, the base URL and the API key, so a multi-tenant
+# bench can never hand one site's client — and therefore its credentials — to
+# another. Timeout is part of the key too: callers pass a timeout that suits
+# their operation (3s for a health check, 35s for a restart) and httpx fixes it
+# at construction, so keying on it keeps that behaviour exactly while still
+# collapsing the repeated calls at each timeout down to one client.
+_CLIENTS: dict[tuple, httpx.Client] = {}
+
+
 def get_gateway_client(timeout: float = 10.0) -> httpx.Client:
-	"""Build an httpx client for the configured gateway.
+	"""Return a pooled httpx client for the configured gateway.
 
 	Auth is sent as X-API-Key (the gateway's documented header); Authorization
 	is included as well since the gateway also accepts Bearer tokens.
+
+	The client is shared, so callers must not close it. httpx.Client is safe to
+	use from several threads.
 	"""
 	settings = frappe.get_single("OpenWA Gateway Settings")
 	if not settings.gateway_base_url:
@@ -48,14 +65,30 @@ def get_gateway_client(timeout: float = 10.0) -> httpx.Client:
 			title=frappe._("Gateway Not Configured"),
 		)
 	api_key = settings.get_password("gateway_api_key") or ""
-	return httpx.Client(
-		base_url=settings.gateway_base_url.rstrip("/"),
+	base_url = settings.gateway_base_url.rstrip("/")
+
+	key = (getattr(frappe.local, "site", None), base_url, api_key, timeout)
+	client = _CLIENTS.get(key)
+	if client is not None and not client.is_closed:
+		return client
+
+	client = httpx.Client(
+		base_url=base_url,
 		headers={
 			"X-API-Key": api_key,
 			"Authorization": f"Bearer {api_key}",
 		},
 		timeout=timeout,
 	)
+	# Rotating the URL or key produces a new key, so the stale client would sit
+	# here holding sockets open. Only one configuration is ever live per site.
+	for stale_key in [k for k in _CLIENTS if k[0] == key[0] and k != key and k[1:3] != key[1:3]]:
+		try:
+			_CLIENTS.pop(stale_key).close()
+		except Exception:
+			pass
+	_CLIENTS[key] = client
+	return client
 
 
 def map_gateway_status(gateway_status: str | None) -> str:

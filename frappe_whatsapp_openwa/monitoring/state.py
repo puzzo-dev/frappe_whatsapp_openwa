@@ -81,7 +81,12 @@ def handle_session_event(payload: dict):
 		return
 
 	session.last_state_change = frappe.utils.now()
-	session.save(ignore_permissions=True)
+	# Sync path — bypass the manual-edit guard.
+	frappe.flags.openwa_sync = True
+	try:
+		session.save(ignore_permissions=True)
+	finally:
+		frappe.flags.openwa_sync = False
 
 	from frappe_whatsapp_openwa.utils.cache import invalidate_session_status
 

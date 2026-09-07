@@ -15,7 +15,7 @@ _TTL = 86_400
 _PREFIX = "openwa:webhook:dedup"
 
 
-def claim_event(event_type: str, event_id: str) -> bool:
+def claim_event(event_type: str, event_id: str, ttl: int = _TTL) -> bool:
 	"""Atomically claim this event for processing.
 
 	Uses Redis SET NX EX so the existence check and the write are a single
@@ -27,6 +27,12 @@ def claim_event(event_type: str, event_id: str) -> bool:
 
 	When event_id is empty, always returns True (no deduplication possible
 	without an ID — caller must handle at-least-once delivery itself).
+
+	ttl bounds how long the claim is remembered. Callers keying on a natural
+	gateway id (a message id) want the full 24 h. Callers keying on the request
+	signature — the only identifier session events have — want a short window,
+	because two *legitimate* identical events are byte-identical and would
+	otherwise be suppressed for a day.
 	"""
 	if not event_id:
 		return True
@@ -35,5 +41,5 @@ def claim_event(event_type: str, event_id: str) -> bool:
 	# across tenants on a multi-site bench.
 	key = frappe.cache.make_key(f"{_PREFIX}:{event_type}:{event_id}")
 	# SET NX EX: returns True if the key was set, None if it already existed.
-	result = frappe.cache.set(key, "1", nx=True, ex=_TTL)
+	result = frappe.cache.set(key, "1", nx=True, ex=ttl)
 	return result is not None

@@ -35,7 +35,12 @@ def _do_heal():
 	if not sessions:
 		return
 
-	from frappe_whatsapp_openwa.utils.gateway import get_gateway_client
+	from frappe_whatsapp_openwa.utils.gateway import (
+		STATUS_CONNECTED,
+		fetch_session,
+		get_gateway_client,
+		map_gateway_status,
+	)
 
 	client = get_gateway_client(timeout=35.0)
 
@@ -45,6 +50,34 @@ def _do_heal():
 		# Grace period: don't restart immediately on disconnect
 		grace = s.disconnect_grace_until
 		if grace and now < frappe.utils.get_datetime(grace):
+			continue
+
+		# Corroborate the disconnect against the gateway before acting on it.
+		# The local "Disconnected" status is set from a webhook, and the webhook
+		# signature covers only the body — it carries no timestamp or nonce, so a
+		# captured session.disconnected request stays valid forever and can be
+		# replayed to mark a healthy session as down. Restarting on that unverified
+		# signal is what turns a replay into a real outage: the restart genuinely
+		# drops a live WhatsApp session, and three of them escalate it to Failed.
+		# Asking the gateway for the truth costs one GET on a path that only runs
+		# for already-disconnected sessions.
+		#
+		# Only a positive "connected" answer suppresses the restart. A timeout or
+		# an unreachable gateway returns None and we fall through to the previous
+		# behaviour, so a genuinely disconnected session is still healed.
+		gw = fetch_session(client, s.gateway_session_id)
+		if gw is not None and map_gateway_status(gw.get("status")) == STATUS_CONNECTED:
+			frappe.db.set_value(
+				"OpenWA Session",
+				s.name,
+				{
+					"status": STATUS_CONNECTED,
+					"last_state_change": now,
+					"requires_human_attention": 0,
+					"consecutive_disconnect_count": 0,
+				},
+				update_modified=False,
+			)
 			continue
 
 		attempts = s.restart_attempt_count or 0

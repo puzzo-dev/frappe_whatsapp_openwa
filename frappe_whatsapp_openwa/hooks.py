@@ -26,7 +26,12 @@ override_whitelisted_methods = {
 # ─── DocType events ──────────────────────────────────────────────────────
 doc_events = {
 	"WhatsApp Account": {
-		"validate": "frappe_whatsapp_openwa.overrides.send.validate_account",
+		# No "validate" hook here. It used to point at send.validate_account,
+		# which loads the Provider Extension and returns silently when it does
+		# not exist yet — which is every first save, because ensure_extension_doc
+		# only creates it in after_save. The rule it was meant to enforce lives
+		# in WhatsAppAccountProviderExtension.validate, where the document being
+		# validated is the one that holds the setting.
 		"after_save": "frappe_whatsapp_openwa.overrides.send.ensure_extension_doc",
 	},
 }

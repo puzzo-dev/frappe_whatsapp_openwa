@@ -174,7 +174,9 @@ class TestExtFromContentType(unittest.TestCase):
 class TestHandleAck(unittest.TestCase):
 	def test_read_ack_updates_status(self):
 		frappe_mock = _make_frappe_mock()
-		frappe_mock.db.get_value.return_value = "WA-MSG-001"
+		# _handle_ack now fetches the current status too, so it can refuse an ack
+		# that would move the message backwards (see test_ack_ordering.py).
+		frappe_mock.db.get_value.return_value = {"name": "WA-MSG-001", "status": "Sent"}
 		log = MagicMock()
 		payload = {
 			"event": "message.ack",
@@ -243,3 +245,49 @@ class TestIdempotency(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+# ─── Session-event replay window (OWA-05) ────────────────────────────────────
+
+class TestHandleSessionReplay(unittest.TestCase):
+	"""Session events carry no gateway id or timestamp, so the request signature
+	is the only replay token available. A repeated signature inside the window
+	must not reach the state machine."""
+
+	def _run(self, set_result, signature="sha256=abc123"):
+		frappe_mock = _make_frappe_mock()
+		frappe_mock.request = MagicMock()
+		frappe_mock.request.headers = {"X-OpenWA-Signature": signature} if signature else {}
+		frappe_mock.cache.set.return_value = set_result
+
+		log = MagicMock()
+		payload = {"event": "session.disconnected", "sessionId": "sess-001"}
+
+		with patch("frappe_whatsapp_openwa.api.webhook.frappe", frappe_mock), \
+			patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock), \
+			patch("frappe_whatsapp_openwa.monitoring.state.handle_session_event") as handler:
+			from frappe_whatsapp_openwa.api.webhook import _handle_session
+			_handle_session(payload, log)
+		return handler, log, frappe_mock
+
+	def test_first_delivery_is_processed(self):
+		handler, log, _ = self._run(set_result=True)
+		handler.assert_called_once()
+		self.assertEqual(log.processed, 1)
+
+	def test_replayed_signature_is_dropped(self):
+		"""SET NX returns None — the event was already seen, so it must not be replayed
+		into handle_session_event (which would flip a live session's status)."""
+		handler, log, _ = self._run(set_result=None)
+		handler.assert_not_called()
+		self.assertEqual(log.processed, 1)
+
+	def test_replay_window_is_short(self):
+		"""A 24 h TTL would suppress genuine repeated flapping — the window must be short."""
+		_, _, frappe_mock = self._run(set_result=True)
+		self.assertEqual(frappe_mock.cache.set.call_args.kwargs["ex"], 60)
+
+	def test_missing_signature_still_processed(self):
+		"""No signature header means no dedup token — fail open rather than drop events."""
+		handler, _, _ = self._run(set_result=True, signature="")
+		handler.assert_called_once()

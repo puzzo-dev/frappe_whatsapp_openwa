@@ -81,20 +81,20 @@ class TestHandleDispatchFailure(unittest.TestCase):
 			self.assertGreaterEqual(_BACKOFF_MINUTES[i], _BACKOFF_MINUTES[i - 1])
 
 
-# ─── _cap_reached ────────────────────────────────────────────────────────────
+# ─── session_cap.cap_reached ─────────────────────────────────────────────────
 
 class TestCapReached(unittest.TestCase):
 	def _call(self, sent: int, cap: int) -> bool:
 		frappe_mock = _make_frappe_mock()
-		# _cap_reached uses frappe.db.get_value(..., as_dict=True)
+		# cap_reached uses frappe.db.get_value(..., as_dict=True)
 		# which returns a frappe._dict (dot-accessible); mock as MagicMock with attrs
 		row = MagicMock()
 		row.messages_sent_today = sent
 		row.daily_soft_cap = cap
 		frappe_mock.db.get_value.return_value = row
-		with patch("frappe_whatsapp_openwa.queue.worker.frappe", frappe_mock):
-			from frappe_whatsapp_openwa.queue.worker import _cap_reached
-			return _cap_reached("sess-001")
+		with patch("frappe_whatsapp_openwa.utils.session_cap.frappe", frappe_mock):
+			from frappe_whatsapp_openwa.utils.session_cap import cap_reached
+			return cap_reached("sess-001")
 
 	def test_under_cap_false(self):       self.assertFalse(self._call(500, 1000))
 	def test_at_cap_true(self):           self.assertTrue(self._call(1000, 1000))
@@ -104,9 +104,9 @@ class TestCapReached(unittest.TestCase):
 	def test_missing_session_false(self):
 		frappe_mock = _make_frappe_mock()
 		frappe_mock.db.get_value.return_value = None
-		with patch("frappe_whatsapp_openwa.queue.worker.frappe", frappe_mock):
-			from frappe_whatsapp_openwa.queue.worker import _cap_reached
-			self.assertFalse(_cap_reached("sess-missing"))
+		with patch("frappe_whatsapp_openwa.utils.session_cap.frappe", frappe_mock):
+			from frappe_whatsapp_openwa.utils.session_cap import cap_reached
+			self.assertFalse(cap_reached("sess-missing"))
 
 
 # ─── _process_row expiry ─────────────────────────────────────────────────────

@@ -117,8 +117,8 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
             self._save_message_log(data, doc_data, account_name, result)
             self._apply_set_property(doc_data)
             if result.provider == "openwa" and session_name:
-                from frappe_whatsapp_openwa.overrides.whatsapp_message import _increment_session_counter
-                _increment_session_counter(session_name)
+                from frappe_whatsapp_openwa.utils.session_cap import count_slot
+                count_slot(session_name)
             self._save_notification_log(meta_data={"provider": result.provider, "message_id": result.message_id})
             frappe.msgprint("WhatsApp Message Triggered", indicator="green", alert=True)
         else:
@@ -200,21 +200,70 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
         frappe.get_doc(new_doc).save(ignore_permissions=True)
 
     def _apply_set_property(self, doc_data) -> None:
-        """Write set_property_after_alert to the reference doc (mirrors upstream)."""
+        """Write set_property_after_alert to the reference doc (mirrors upstream).
+
+        This deliberately keeps upstream's ignore_permissions: the field and the
+        value come from the alert's own configuration, which only an
+        administrator can edit, and the alert fires for whichever user happened
+        to touch the document — requiring that user to have write access would
+        break legitimate automation (a portal user submitting a form, say).
+
+        What it must not skip are the guards core applies around that write, and
+        the previous implementation skipped all of them by going straight to
+        frappe.db.set_value:
+
+          - a submitted document may only be changed on fields marked
+            allow_on_submit, otherwise the alert silently mutates submitted
+            records and bypasses submitted-document immutability;
+          - the save re-fires document events, which can re-enter this alert, so
+            core flags the document to stop the loop;
+          - going through doc.save() keeps validation, version history and the
+            "via ..." updater reference, which a raw set_value discards.
+        """
         if not (doc_data and self.set_property_after_alert and self.property_value):
             return
         dt = doc_data.get("doctype") if isinstance(doc_data, dict) else getattr(doc_data, "doctype", None)
         dn = doc_data.get("name") if isinstance(doc_data, dict) else getattr(doc_data, "name", None)
         if not (dt and dn):
             return
-        meta = frappe.get_meta(dt)
-        df = meta.get_field(self.set_property_after_alert)
+
+        try:
+            doc = frappe.get_doc(dt, dn)
+        except frappe.DoesNotExistError:
+            return
+
+        fieldname = self.set_property_after_alert
+        df = doc.meta.get_field(fieldname)
         if not df:
             return
+
+        if doc.docstatus.is_submitted() and not df.allow_on_submit:
+            return
+
+        if doc.flags.in_notification_update:
+            return
+
         value = self.property_value
         if df.fieldtype in frappe.model.numeric_fieldtypes:
             value = frappe.utils.cint(value)
-        frappe.db.set_value(dt, dn, self.set_property_after_alert, value)
+
+        try:
+            doc.reload()
+            doc.set(fieldname, value)
+            doc.flags.updater_reference = {
+                "doctype": self.doctype,
+                "docname": self.name,
+                "label": frappe._("via WhatsApp Notification"),
+            }
+            doc.flags.in_notification_update = True
+            doc.save(ignore_permissions=True)
+        except Exception:
+            frappe.log_error(
+                title="DualGateway: set_property_after_alert failed",
+                message=frappe.get_traceback(),
+            )
+        finally:
+            doc.flags.in_notification_update = False
 
     def _save_notification_log(self, meta_data: dict) -> None:
         """Insert a WhatsApp Notification Log record (mirrors upstream finally block)."""

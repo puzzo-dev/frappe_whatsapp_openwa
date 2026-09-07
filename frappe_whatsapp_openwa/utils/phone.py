@@ -38,3 +38,19 @@ def normalise_e164(phone: str) -> str:
 	if digits.startswith("0") and len(digits) == 11:
 		return f"+234{digits[1:]}"
 	return f"+{digits}"
+
+
+def to_pairing_code_digits(phone: str) -> str:
+	"""Normalise a phone number for the gateway pairing-code endpoint.
+
+	The OpenWA ``POST /api/sessions/:id/pairing-code`` contract requires
+	digits-only international format (6–15 digits, no ``+``/spaces/dashes).
+
+	Raises ``ValueError`` if the result is outside that range.
+	"""
+	digits = re.sub(r"[^\d]", "", phone or "")
+	if len(digits) < 6 or len(digits) > 15:
+		raise ValueError(
+			f"Phone number must be 6–15 digits after stripping non-digits; got {len(digits)} ('{phone}')."
+		)
+	return digits

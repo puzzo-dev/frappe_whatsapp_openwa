@@ -45,16 +45,32 @@ except ImportError:
 	from frappe.model.document import Document as _UpstreamBase  # type: ignore[assignment]
 
 
+from frappe_whatsapp_openwa.utils.session_cap import release_slot, reserve_slot
+
+
 class WhatsAppMessageDualGateway(_UpstreamBase):
 	def send_outgoing(self):
 		if self.type != "Outgoing":
 			return
 
-		# WhatsAppNotification.notify() creates a log doc with message_id already set
-		# (it sends directly to Meta via make_post_request before creating the doc).
-		# Routing that log doc through our stack would cause a double-send.
-		# Mirror the upstream guard: skip if message_id is already populated.
-		if self.message_id and self.message_type == "Template":
+		# A message_id is assigned by the provider when the message is dispatched,
+		# so a document that already carries one has already been sent and must
+		# never be dispatched again.
+		#
+		# The message_type == "Template" qualifier that used to be here mirrored
+		# upstream, where the guard sits on the template branch only
+		# (`elif not self.message_id: self.send_template()`). That is safe
+		# upstream because nothing there sends before insert. It is not safe
+		# here: MetaAdapter dispatches via the upstream controller and *then*
+		# calls insert(), so before_insert re-entered this method with a
+		# message_id already set, and for a non-template message the qualifier
+		# let it fall through and send to Meta a second time — a duplicate
+		# message and a duplicate charge on every text and media send that
+		# routed to Meta.
+		#
+		# Retries are unaffected: a send that failed never received a
+		# message_id, so a Failed document still re-sends.
+		if self.message_id:
 			return
 
 		# Ensure the upstream base is really WhatsAppMessage (not the fallback Document).
@@ -102,7 +118,9 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			self._enqueue_for_later(session_name)
 			return
 
-		if session_name and self._is_daily_cap_reached(session_name):
+		# Claim the cap slot before sending. Checking first and incrementing
+		# after let two concurrent senders both observe room and both send.
+		if session_name and not reserve_slot(session_name):
 			self._handle_cap_reached(session_name)
 			return
 
@@ -150,9 +168,14 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			self.status = "Success"
 			self.message_id = result.message_id or ""
 			self.custom_provider_used = result.provider
-			if result.provider == "openwa" and session_name:
-				_increment_session_counter(session_name)
+			# The slot was claimed up front; it only stays claimed if the
+			# message actually went out over OpenWA (a Meta fallback consumes
+			# no OpenWA capacity).
+			if result.provider != "openwa" and session_name:
+				release_slot(session_name)
 		else:
+			if session_name:
+				release_slot(session_name)
 			self.status = "Failed"
 			frappe.throw(
 				frappe._(f"OpenWA send failed: {result.error}"),
@@ -188,9 +211,11 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			self.status = "Success"
 			self.message_id = result.message_id or ""
 			self.custom_provider_used = result.provider
-			if result.provider == "openwa" and session_name:
-				_increment_session_counter(session_name)
+			if result.provider != "openwa" and session_name:
+				release_slot(session_name)
 		else:
+			if session_name:
+				release_slot(session_name)
 			self.status = "Failed"
 			frappe.throw(
 				frappe._(f"OpenWA template send failed: {result.error}"),
@@ -215,6 +240,25 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			]
 
 		if self.reference_doctype and self.reference_name:
+			# Upstream renders the reference document's fields into the outgoing
+			# message without checking read access. That is harmless while
+			# WhatsApp Message create is System Manager only, but the send
+			# endpoints are now usable by company-scoped roles (OWA-03), and a
+			# sender who cannot read a document must not be able to have its
+			# field values rendered into a message and delivered to a number of
+			# their choosing.
+			#
+			# ignore_permissions is honoured so server-side automation that
+			# legitimately runs beyond the session user keeps working.
+			if not self.flags.ignore_permissions and not frappe.has_permission(
+				self.reference_doctype, "read", doc=self.reference_name
+			):
+				raise frappe.PermissionError(
+					frappe._("Not permitted to read {0} {1}").format(
+						self.reference_doctype, self.reference_name
+					)
+				)
+
 			ref_doc = frappe.get_doc(self.reference_doctype, self.reference_name)
 			field_names = (
 				(template.field_names or "").split(",")
@@ -239,20 +283,6 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			raise_rate_limit_error(account_name, context)
 
 	# ── Daily soft cap ──────────────────────────────────────────────────
-
-	def _is_daily_cap_reached(self, session_name: str) -> bool:
-		row = frappe.db.get_value(
-			"OpenWA Session",
-			session_name,
-			["messages_sent_today", "daily_soft_cap"],
-			as_dict=True,
-		)
-		if not row:
-			return False
-		cap = row.daily_soft_cap or 0
-		if cap == 0:
-			return False
-		return (row.messages_sent_today or 0) >= cap
 
 	def _handle_cap_reached(self, session_name: str) -> None:
 		try:
@@ -313,12 +343,6 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 		)
 
 
-def _increment_session_counter(session_name: str) -> None:
-	"""Atomically increment messages_sent_today for an OpenWA Session."""
-	frappe.db.sql(
-		"UPDATE `tabOpenWA Session` SET messages_sent_today = messages_sent_today + 1 WHERE name = %s",
-		session_name,
-	)
 
 
 def _extract_button_labels(template) -> list[str]:

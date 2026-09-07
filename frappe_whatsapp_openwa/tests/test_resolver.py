@@ -15,13 +15,21 @@ def _make_ext(
 	openwa_session="sess-1",
 	allow_message_level_override=0,
 ):
-	ext = MagicMock()
-	ext.default_provider = default_provider
-	ext.routing_mode_override = routing_mode_override
-	ext.openwa_session = openwa_session
-	ext.allow_message_level_override = allow_message_level_override
-	ext.linked_whatsapp_account = None
-	return ext
+	# The resolver reads the extension with db.get_value(..., as_dict=True),
+	# which returns a frappe._dict — attribute access over a plain mapping, and
+	# no child tables. Mirrored here so the tests exercise the real shape.
+	return _Dict(
+		name="Test Account",
+		default_provider=default_provider,
+		routing_mode_override=routing_mode_override,
+		openwa_session=openwa_session,
+		allow_message_level_override=allow_message_level_override,
+		linked_whatsapp_account=None,
+	)
+
+
+class _Dict(dict):
+	__getattr__ = dict.get
 
 
 def _sessions(names, default_idx=0, healthy=True):
@@ -39,8 +47,11 @@ class TestResolveProvider:
 		cache_mock = MagicMock()
 		cache_mock.get_value.return_value = None  # always cache miss
 
+		db_mock = MagicMock()
+		db_mock.get_value.return_value = ext
+
 		with (
-			patch.object(_frappe, "get_doc", return_value=ext),
+			patch.object(_frappe, "db", db_mock),
 			patch.object(_frappe, "cache", cache_mock),
 			patch(
 				"frappe_whatsapp_openwa.routing.resolver._session_is_healthy",

@@ -28,6 +28,7 @@ def route_send_text(
 	requested_provider: str | None = None,
 	meta_fallback_fn: Callable[[], SendResult] | None = None,
 	session_strategy: str | None = None,
+	adapter_retries: bool = True,
 ) -> SendResult:
 	"""Route a text message.
 
@@ -35,6 +36,12 @@ def route_send_text(
 	  When called from the doctype override, pass a closure that calls
 	  super().send_outgoing() on the real doc instead of creating a throwaway.
 	  When called from the queue worker, leave None to use MetaAdapter.
+
+	adapter_retries — False from the queue worker, which retries the whole
+	  message itself; leaving the adapter's own retry on as well multiplies one
+	  network blip into many gateway calls, and a timeout is not proof of
+	  non-delivery. Passed explicitly rather than through frappe.flags so it
+	  cannot leak between jobs sharing a worker process.
 	"""
 	provider, session_name = resolve_provider(account_name, requested_provider, session_strategy)
 	_meta = meta_fallback_fn or (lambda: MetaAdapter(account_name).send_text(to, body, account_name))
@@ -44,6 +51,7 @@ def route_send_text(
 		account_name, session_name, to,
 		fn=lambda adapter: adapter.send_text(to, body, account_name),
 		fallback_fn=_meta,
+		adapter_retries=adapter_retries,
 	)
 
 
@@ -56,6 +64,7 @@ def route_send_media(
 	requested_provider: str | None = None,
 	meta_fallback_fn: Callable[[], SendResult] | None = None,
 	session_strategy: str | None = None,
+	adapter_retries: bool = True,
 ) -> SendResult:
 	_meta = meta_fallback_fn or (
 		lambda: MetaAdapter(account_name).send_media(to, media_url, caption, media_type, account_name)
@@ -67,6 +76,7 @@ def route_send_media(
 		account_name, session_name, to,
 		fn=lambda adapter: adapter.send_media(to, media_url, caption, media_type, account_name),
 		fallback_fn=_meta,
+		adapter_retries=adapter_retries,
 	)
 
 
@@ -76,8 +86,9 @@ def _try_openwa_then_fallback(
 	recipient: str,
 	fn: Callable[[OpenWAAdapter], SendResult],
 	fallback_fn: Callable[[], SendResult],
+	adapter_retries: bool = True,
 ) -> SendResult:
-	adapter = _build_openwa_adapter(session_name)
+	adapter = _build_openwa_adapter(session_name, adapter_retries)
 	if adapter is None:
 		return fallback_fn()
 
@@ -116,7 +127,9 @@ def _try_openwa_then_fallback(
 		)
 
 
-def _build_openwa_adapter(session_name: str | None) -> OpenWAAdapter | None:
+def _build_openwa_adapter(
+	session_name: str | None, adapter_retries: bool = True
+) -> OpenWAAdapter | None:
 	if not session_name:
 		return None
 	try:
@@ -126,6 +139,7 @@ def _build_openwa_adapter(session_name: str | None) -> OpenWAAdapter | None:
 			gateway_url=settings.gateway_base_url,
 			api_key=settings.get_password("gateway_api_key"),
 			session_id=session.gateway_session_id or session_name,
+			retry_network_errors=adapter_retries,
 		)
 	except Exception as e:
 		frappe.log_error(title="OpenWA adapter build failed", message=str(e))

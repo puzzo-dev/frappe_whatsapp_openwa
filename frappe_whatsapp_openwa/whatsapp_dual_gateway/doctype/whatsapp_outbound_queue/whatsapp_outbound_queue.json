@@ -88,10 +88,10 @@
   },
   {
    "fieldname": "resulting_message_id",
-   "fieldtype": "Link",
-   "label": "Resulting Message",
-   "options": "WhatsApp Message",
-   "read_only": 1
+   "fieldtype": "Data",
+   "label": "Resulting Message ID",
+   "read_only": 1,
+   "description": "Provider-assigned message id (not a WhatsApp Message document name)."
   },
   {
    "fieldname": "section_break_2",

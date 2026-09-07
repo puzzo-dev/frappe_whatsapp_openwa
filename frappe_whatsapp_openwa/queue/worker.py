@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import frappe
 
+from frappe_whatsapp_openwa.utils.session_cap import cap_reached, release_slot, reserve_slot
+
 _STUCK_SENDING_MINUTES = 5
 _BATCH_SIZE = 50
 
@@ -29,11 +31,22 @@ def _run_queue():
 
 	# ── Reaper: recover rows stuck in Sending for > N min ────────────────
 	stale_cutoff = frappe.utils.add_to_date(now, minutes=-_STUCK_SENDING_MINUTES)
+	# A row that already recorded a provider message id was delivered; only its
+	# status write was lost. Re-queueing it would send the message a second
+	# time, so it is excluded and left for an operator to inspect.
+	#
+	# This narrows the duplicate window but does not close it: a worker killed
+	# between the gateway call and the status write leaves no message id, and
+	# nothing in the row can distinguish that from a send that never left. The
+	# gateway offers no idempotency key to make the retry safe, so this stays
+	# at-least-once by construction — _STUCK_SENDING_MINUTES is set well beyond
+	# any single request timeout so only a dead worker trips it.
 	frappe.db.sql(
 		"""UPDATE `tabWhatsApp Outbound Queue`
 		   SET status = 'Queued',
 		       failure_log = CONCAT(COALESCE(failure_log,''), ' [auto-recovered from stuck-Sending]')
-		   WHERE status = 'Sending' AND last_attempt_at < %s""",
+		   WHERE status = 'Sending' AND last_attempt_at < %s
+		     AND (resulting_message_id IS NULL OR resulting_message_id = '')""",
 		stale_cutoff,
 	)
 	frappe.db.commit()
@@ -95,7 +108,7 @@ def _process_row(row, now):
 		return  # Still unhealthy — leave Queued for next tick
 
 	# ── Daily cap check (queue worker respects the cap too) ───────────────
-	if provider == "openwa" and session_name and _cap_reached(session_name):
+	if provider == "openwa" and session_name and cap_reached(session_name):
 		return  # Cap still active — leave Queued until midnight reset
 
 	# ── Atomic claim ─────────────────────────────────────────────────────
@@ -110,12 +123,33 @@ def _process_row(row, now):
 	# ROW_COUNT() reflects the immediately preceding UPDATE in this connection —
 	# no separate SELECT needed, and no race window between claim and verification.
 	claimed = frappe.db.sql("SELECT ROW_COUNT()", as_list=True)[0][0]
+	# This commit is load-bearing, not leftover debris: the claim only excludes
+	# other workers once it is visible outside this transaction. Deferring it to
+	# the end of the job would let two workers each read status='Queued', both
+	# claim the row, and both send — the duplicate delivery this claim exists to
+	# prevent.
 	frappe.db.commit()
 
 	if not claimed:
 		return  # Another worker won the race
 
 	attempts = (row.attempts or 0) + 1  # Incremented by the claim UPDATE above
+
+	# Claim the session's cap slot before dispatching. The worker previously
+	# checked the cap but never incremented the counter, so queued messages were
+	# invisible to it: a backlog draining after a session recovered could blow
+	# straight through the daily cap without ever registering a single send.
+	reserved = False
+	if provider == "openwa" and session_name:
+		if not reserve_slot(session_name):
+			# Someone took the last slot between the check above and here.
+			frappe.db.set_value(
+				"WhatsApp Outbound Queue", row.name, "status", "Queued",
+				update_modified=False,
+			)
+			frappe.db.commit()
+			return
+		reserved = True
 
 	try:
 		result = _dispatch(row, payload, session_strategy)
@@ -125,11 +159,23 @@ def _process_row(row, now):
 				"final_provider_used": result.provider,
 				"resulting_message_id": result.message_id or "",
 			})
+			# A Meta fallback consumes no OpenWA capacity.
+			if reserved and result.provider != "openwa":
+				release_slot(session_name)
 		else:
+			if reserved:
+				release_slot(session_name)
 			_handle_dispatch_failure(row.name, result.error or "Unknown error", attempts)
 	except Exception as e:
+		if reserved:
+			release_slot(session_name)
 		_handle_dispatch_failure(row.name, str(e), attempts)
 
+	# Likewise required. The send above is an external side effect that cannot be
+	# rolled back, so its outcome has to be durable before the next row is
+	# processed; otherwise a later failure in this batch would roll back the
+	# 'Sent' status of a message that really was delivered, and the next tick
+	# would send it again.
 	frappe.db.commit()
 
 
@@ -179,19 +225,6 @@ def _create_dead_letter(queue_name: str, error: str) -> None:
 		)
 
 
-def _cap_reached(session_name: str) -> bool:
-	row = frappe.db.get_value(
-		"OpenWA Session",
-		session_name,
-		["messages_sent_today", "daily_soft_cap"],
-		as_dict=True,
-	)
-	if not row:
-		return False
-	cap = row.daily_soft_cap or 0
-	return cap > 0 and (row.messages_sent_today or 0) >= cap
-
-
 def _dispatch(row, payload: dict, session_strategy: str | None = None):
 	from frappe_whatsapp_openwa.routing.router import route_send_media, route_send_text
 
@@ -203,20 +236,80 @@ def _dispatch(row, payload: dict, session_strategy: str | None = None):
 			body=payload.get("body", ""),
 			requested_provider=row.requested_provider,
 			session_strategy=session_strategy,
+			# This function is already the retry loop — see route_send_text.
+			adapter_retries=False,
 		)
 	elif msg_type in ("image", "document", "video", "audio"):
+		# _enqueue_for_later stores the media URL under "attach" and the caption
+		# under "body". Reading only "media_url"/"caption" meant every queued
+		# media message dispatched with an empty URL and no caption. Both key
+		# spellings are accepted so rows already sitting in the queue drain
+		# correctly instead of failing their way to Failed.
 		return route_send_media(
 			account_name=row.account,
 			to=row.recipient,
-			media_url=payload.get("media_url", ""),
-			caption=payload.get("caption"),
+			media_url=payload.get("media_url") or payload.get("attach") or "",
+			caption=payload.get("caption") or payload.get("body") or None,
 			media_type=msg_type,
 			requested_provider=row.requested_provider,
 			session_strategy=session_strategy,
+			adapter_retries=False,
 		)
+	elif msg_type == "template":
+		# _enqueue_for_later queues templates as "template", which had no branch
+		# here at all: every template queued because a session was unhealthy
+		# retried six times and died as "Unsupported message_type 'template'".
+		# The template is flattened the same way the direct send path flattens
+		# it, so a queued template and an immediate one produce the same text.
+		return _dispatch_template(row, payload, session_strategy)
 	else:
 		from frappe_whatsapp_openwa.providers.base import SendResult
 		return SendResult(
 			success=False, provider="unknown", message_id=None,
 			raw_response={}, error=f"Unsupported message_type '{msg_type}'"
 		)
+
+
+def _dispatch_template(row, payload: dict, session_strategy: str | None = None):
+	"""Flatten a queued template and send it as text via the router."""
+	from frappe_whatsapp_openwa.providers.base import SendResult
+	from frappe_whatsapp_openwa.routing.router import route_send_text
+	from frappe_whatsapp_openwa.translators.template_flattener import (
+		extract_params_from_body_param,
+		flatten_template,
+	)
+
+	template_name = payload.get("template") or ""
+	if not template_name:
+		return SendResult(
+			success=False, provider="unknown", message_id=None,
+			raw_response={}, error="Queued template row carries no template name",
+		)
+
+	try:
+		template = frappe.get_doc("WhatsApp Templates", template_name)
+	except frappe.DoesNotExistError:
+		return SendResult(
+			success=False, provider="unknown", message_id=None,
+			raw_response={}, error=f"Template '{template_name}' no longer exists",
+		)
+
+	# Shared with the direct send path so the two cannot drift apart again.
+	from frappe_whatsapp_openwa.overrides.whatsapp_message import _extract_button_labels
+
+	body = flatten_template(
+		body=template.template or "",
+		parameters=extract_params_from_body_param(payload.get("body_param") or ""),
+		header=template.header or None,
+		footer=template.footer or None,
+		buttons=_extract_button_labels(template) or None,
+	)
+
+	return route_send_text(
+		account_name=row.account,
+		to=row.recipient,
+		body=body,
+		requested_provider=row.requested_provider,
+		session_strategy=session_strategy,
+		adapter_retries=False,
+	)

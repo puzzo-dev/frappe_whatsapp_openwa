@@ -9,15 +9,41 @@ from __future__ import annotations
 
 import frappe
 
+_METRICS_CACHE_KEY = "openwa:metrics"
+_METRICS_CACHE_TTL = 60
+
 
 @frappe.whitelist()
 def get_gateway_metrics() -> dict:
-	"""Return current operational metrics for the WhatsApp Dual Gateway."""
-	return {
+	"""Return current operational metrics for the WhatsApp Dual Gateway.
+
+	@frappe.whitelist() alone means any logged-in user, and the counts below are
+	built with frappe.get_all, which applies no permission filtering — so this
+	previously handed tenant-wide operational data to anyone with a session.
+	Gated on read of the gateway settings, which is the doctype that governs
+	this integration.
+	"""
+	frappe.has_permission("OpenWA Gateway Settings", "read", throw=True)
+
+	# Three aggregates, one of them a 24-hour scan of the message table grouped
+	# by provider. Dashboards and external monitors poll this on a timer, and
+	# every poll recomputed all of it. A short cache makes repeated polls free
+	# while keeping the numbers current enough to watch a session recover.
+	#
+	# The key is site-scoped via make_key, and the value is cached after the
+	# permission check so an unauthorised caller can never be served from it.
+	cache_key = frappe.cache.make_key(_METRICS_CACHE_KEY)
+	cached = frappe.cache.get_value(cache_key)
+	if cached:
+		return cached
+
+	metrics = {
 		"sessions": _session_metrics(),
 		"queue": _queue_metrics(),
 		"messages": _message_metrics(),
 	}
+	frappe.cache.set_value(cache_key, metrics, expires_in_sec=_METRICS_CACHE_TTL)
+	return metrics
 
 
 def _session_metrics() -> dict:

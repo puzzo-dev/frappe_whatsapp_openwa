@@ -70,6 +70,7 @@
    "fieldname": "gateway_session_id",
    "fieldtype": "Data",
    "label": "Gateway Session ID",
+   "read_only": 1,
    "search_index": 1
   },
   {
@@ -83,6 +84,7 @@
    "options": "Initializing\nQR Required\nConnected\nDisconnected\nFailed",
    "default": "Initializing",
    "in_list_view": 1,
+   "read_only": 1,
    "reqd": 1,
    "search_index": 1
   },

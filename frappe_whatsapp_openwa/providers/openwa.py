@@ -15,7 +15,7 @@ from frappe_whatsapp_openwa.providers.base import (
 	WhatsAppProvider,
 )
 from frappe_whatsapp_openwa.utils.phone import to_wa_format
-from frappe_whatsapp_openwa.utils.retry import retry_on_network_error
+from frappe_whatsapp_openwa.utils.retry import retry_unless_disabled
 
 
 class OpenWAAdapter(WhatsAppProvider):
@@ -25,9 +25,18 @@ class OpenWAAdapter(WhatsAppProvider):
 	before this adapter is constructed.
 	"""
 
-	def __init__(self, gateway_url: str, api_key: str, session_id: str):
+	def __init__(
+		self,
+		gateway_url: str,
+		api_key: str,
+		session_id: str,
+		retry_network_errors: bool = True,
+	):
 		self.base = gateway_url.rstrip("/")
 		self.session_id = session_id
+		# The queue worker turns this off: it retries the whole message itself,
+		# so retrying here as well just multiplies the calls (see retry.py).
+		self.retry_network_errors = retry_network_errors
 		self._client = httpx.Client(
 			timeout=httpx.Timeout(connect=2.0, read=5.0, write=5.0, pool=2.0),
 			headers={
@@ -38,7 +47,7 @@ class OpenWAAdapter(WhatsAppProvider):
 
 	# ── Public API ────────────────────────────────────────────────────────
 
-	@retry_on_network_error
+	@retry_unless_disabled
 	def send_text(self, to: str, body: str, account: str) -> SendResult:
 		url = f"{self.base}/api/sessions/{self.session_id}/messages/send-text"
 		resp = self._client.post(url, json={"chatId": to_wa_format(to), "text": body})
@@ -51,7 +60,7 @@ class OpenWAAdapter(WhatsAppProvider):
 			raw_response=data,
 		)
 
-	@retry_on_network_error
+	@retry_unless_disabled
 	def send_media(
 		self,
 		to: str,
@@ -83,14 +92,14 @@ class OpenWAAdapter(WhatsAppProvider):
 			raw_response=data,
 		)
 
-	@retry_on_network_error
+	@retry_unless_disabled
 	def send_template(self, to: str, template_name: str, components: dict, account: str) -> SendResult:
 		"""OpenWA has no native template concept — caller must pre-flatten via template_flattener."""
 		raise NotImplementedError(
 			"Use overrides.template.send_template_message which flattens to send_text first."
 		)
 
-	@retry_on_network_error
+	@retry_unless_disabled
 	def get_session_status(self, session_id: str) -> SessionStatus:
 		url = f"{self.base}/api/sessions/{session_id}"
 		resp = self._client.get(url)

@@ -24,5 +24,11 @@ def enqueue_message(
 	doc.max_age_minutes = max_age_minutes
 	doc.payload = frappe.as_json(payload)
 	doc.attempts = 0
-	doc.insert(ignore_permissions=True)
+	# db_insert, not insert: a queue row is transient bookkeeping with no child
+	# tables and no validation of its own, but insert() runs the full document
+	# lifecycle — including the wildcard "*" doc_events that frappe, erpnext and
+	# frappe_whatsapp all register, none of which have anything to say about it.
+	# db_insert still assigns the name from the naming series and fills
+	# creation/modified/owner, so the row is identical to the one insert() wrote.
+	doc.db_insert()
 	return doc.name

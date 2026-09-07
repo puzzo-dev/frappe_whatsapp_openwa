@@ -10,6 +10,12 @@ def send_template_message(account, to, template_name, body_param=None, provider=
 	"""
 	frappe.has_permission("WhatsApp Message", "create", throw=True)
 
+	# The account is client-supplied: authorise it as an object, not just the
+	# doctype-wide create right (OWA-03).
+	from frappe_whatsapp_openwa.utils.authz import assert_can_send_from_account
+
+	assert_can_send_from_account(account)
+
 	from frappe_whatsapp_openwa.routing.router import route_send_text
 	from frappe_whatsapp_openwa.translators.template_flattener import (
 		extract_params_from_body_param,
