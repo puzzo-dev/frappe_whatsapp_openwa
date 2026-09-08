@@ -131,14 +131,32 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 				mode_override=mode_override,
 				session_pool=session_pool,
 			)
-		except Exception:
-			frappe.log_error(
-				title="DualGateway: resolver error — falling back to Meta",
-				message=frappe.get_traceback(),
-			)
+		except (frappe.DoesNotExistError, frappe.PermissionError):
+			# The account has no provider extension, or this user may not read
+			# it. Routing has no opinion, so Meta - the upstream default - is
+			# the right answer and not an error worth shouting about.
 			self._check_meta_rate_limit(self.whatsapp_account)
 			super().send_outgoing()
 			return
+		except Exception:
+			# Anything else here is a fault in this app, not a routing outcome.
+			# Falling through to Meta silently sent the message over the wrong
+			# provider - a different number, a different bill - and left a log
+			# entry nobody reads as the only sign. An account configured for
+			# OpenWA must not quietly become an account that sends over Meta
+			# because of a bug, so the send fails and the caller is told.
+			frappe.log_error(
+				title="DualGateway: resolver error",
+				message=frappe.get_traceback(),
+			)
+			self.status = "Failed"
+			frappe.throw(
+				frappe._(
+					"Could not work out how to send this message. The routing "
+					"configuration for {0} needs looking at."
+				).format(self.whatsapp_account),
+				title=frappe._("Message Not Sent"),
+			)
 
 		if provider == "meta":
 			self._check_meta_rate_limit(self.whatsapp_account)

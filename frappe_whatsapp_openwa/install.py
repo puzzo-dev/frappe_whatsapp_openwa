@@ -12,6 +12,9 @@ import frappe
 
 _APP_ROLES = ("OpenWA Manager",)
 
+# Uninstall talks to the gateway once per session; see _release_gateway_sessions.
+_MAX_UNINSTALL_RELEASES = 25
+
 
 def before_uninstall():
 	"""Remove app-owned artefacts that Frappe's module-based uninstall leaves behind."""
@@ -51,7 +54,13 @@ def _release_gateway_sessions():
 	except Exception:
 		return
 
-	for session in sessions:
+	# Bounded. Each release is an HTTP call to a gateway that may be gone,
+	# unreachable or slow, and uninstall is not a place to sit on a network
+	# timeout per session — a site with fifty sessions could hang for minutes on
+	# a command the operator expects to finish. What cannot be released here
+	# stays visible on the gateway for an operator to remove, which is what
+	# release_gateway_session already documents.
+	for session in sessions[:_MAX_UNINSTALL_RELEASES]:
 		try:
 			release_gateway_session(session.name, session.gateway_session_id)
 		except Exception:
@@ -59,6 +68,17 @@ def _release_gateway_sessions():
 				title=f"frappe_whatsapp_openwa uninstall: could not release {session.name}",
 				message=frappe.get_traceback(),
 			)
+
+	if len(sessions) > _MAX_UNINSTALL_RELEASES:
+		frappe.log_error(
+			title="frappe_whatsapp_openwa uninstall: sessions left on the gateway",
+			message=(
+				f"{len(sessions) - _MAX_UNINSTALL_RELEASES} session(s) were not released "
+				"because uninstall stops after "
+				f"{_MAX_UNINSTALL_RELEASES}. They are still on the gateway and need "
+				"removing there."
+			),
+		)
 
 
 def after_migrate():

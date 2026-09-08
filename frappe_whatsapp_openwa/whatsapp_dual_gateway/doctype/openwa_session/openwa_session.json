@@ -51,7 +51,8 @@
    "fieldname": "company",
    "fieldtype": "Link",
    "label": "Company",
-   "options": "Company"
+   "options": "Company",
+   "search_index": 1
   },
   {
    "fieldname": "phone_number",
@@ -59,7 +60,7 @@
    "label": "Phone Number (E.164)",
    "reqd": 1,
    "unique": 1,
-   "description": "The WhatsApp number this session drives. One number, one session — stored in E.164 form so the same number cannot be added again in a different format."
+   "description": "The WhatsApp number this session drives. One number, one session \u2014 stored in E.164 form so the same number cannot be added again in a different format."
   },
   {
    "fieldname": "linked_whatsapp_account",
@@ -160,7 +161,7 @@
    "fieldname": "daily_soft_cap",
    "fieldtype": "Int",
    "label": "Daily Soft Cap",
-   "description": "Most messages this number may send in a day. 0 means no cap for this session. The gateway-wide Daily Send Limit in OpenWA Gateway Settings applies as well — whichever is reached first stops the send."
+   "description": "Most messages this number may send in a day. 0 means no cap for this session. The gateway-wide Daily Send Limit in OpenWA Gateway Settings applies as well \u2014 whichever is reached first stops the send."
   },
   {
    "fieldname": "send_rate_window_seconds",
@@ -206,7 +207,7 @@
    "fieldtype": "Int",
    "label": "Max Sends per Window",
    "default": "20",
-   "description": "How fast this number may send. Separate from Daily Soft Cap: that bounds the day's total, this bounds the pace — a campaign that respects 1000/day by firing them in two minutes is what gets a number blocked."
+   "description": "How fast this number may send. Separate from Daily Soft Cap: that bounds the day's total, this bounds the pace \u2014 a campaign that respects 1000/day by firing them in two minutes is what gets a number blocked."
   },
   {
    "fieldname": "last_message_sent",

@@ -23,7 +23,16 @@ def get_gateway_metrics() -> dict:
 	Gated on read of the gateway settings, which is the doctype that governs
 	this integration.
 	"""
+	# Reading the gateway settings is not the same as being entitled to every
+	# company's traffic. The counts below use frappe.get_all, which applies no
+	# permission filtering at all, so on a multi-company site a company-scoped
+	# user with settings access saw the whole install's volume. System Manager
+	# is what the numbers are for.
 	frappe.has_permission("OpenWA Gateway Settings", "read", throw=True)
+	if frappe.session.user != "Administrator" and "System Manager" not in frappe.get_roles():
+		raise frappe.PermissionError(
+			frappe._("Gateway metrics cover every company on this site.")
+		)
 
 	# Three aggregates, one of them a 24-hour scan of the message table grouped
 	# by provider. Dashboards and external monitors poll this on a timer, and

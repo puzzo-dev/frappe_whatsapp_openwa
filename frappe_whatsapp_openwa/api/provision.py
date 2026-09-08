@@ -154,17 +154,20 @@ def _do_provision(doc) -> dict:
 	status = map_gateway_status(remote.get("status"))
 	qr = fetch_qr_image(client, session_id) if status == STATUS_QR_REQUIRED else ""
 
-	doc.gateway_session_id = session_id
-	doc.status = status
-	doc.qr_code_data = qr
-	doc.last_error = remote.get("lastError") or ""
-	doc.last_state_change = frappe.utils.now()
-	# Sync path — bypass the manual-edit guard in validate().
-	frappe.flags.openwa_sync = True
-	try:
-		doc.save(ignore_permissions=True)
-	finally:
-		frappe.flags.openwa_sync = False
+	# db_set, not save(). Every one of these values came from the gateway, so
+	# there is nothing for validate() to decide about them — which is why the
+	# openwa_sync flag existed at all, to switch the validation back off again.
+	# db_set writes the row and updates the in-memory document, so _publish_state
+	# below still sees the new values, without running the save chain: the
+	# manual-edit guard, the phone-number normalisation, the duplicate check and
+	# every on_update hook, none of which have an opinion about a gateway sync.
+	doc.db_set({
+		"gateway_session_id": session_id,
+		"status": status,
+		"qr_code_data": qr,
+		"last_error": remote.get("lastError") or "",
+		"last_state_change": frappe.utils.now(),
+	}, update_modified=False)
 
 	_publish_state(doc)
 
@@ -363,18 +366,16 @@ def deprovision_session(session_name: str) -> dict:
 		)
 		doc.requires_human_attention = 1
 
-	doc.gateway_session_id = ""
-	doc.status = "Initializing"
-	doc.qr_code_data = ""
-	doc.last_error = ""
-	doc.restart_attempt_count = 0
-	doc.consecutive_disconnect_count = 0
-	# Sync path — bypass the manual-edit guard.
-	frappe.flags.openwa_sync = True
-	try:
-		doc.save(ignore_permissions=True)
-	finally:
-		frappe.flags.openwa_sync = False
+	# Same reasoning as _do_provision: this resets gateway-derived state, so it
+	# writes the row directly rather than running the save chain to do it.
+	doc.db_set({
+		"gateway_session_id": "",
+		"status": "Initializing",
+		"qr_code_data": "",
+		"last_error": "",
+		"restart_attempt_count": 0,
+		"consecutive_disconnect_count": 0,
+	}, update_modified=False)
 
 	from frappe_whatsapp_openwa.utils.cache import invalidate_session_status
 	invalidate_session_status(doc.name)

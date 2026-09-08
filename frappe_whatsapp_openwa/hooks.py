@@ -43,6 +43,14 @@ doc_events = {
 	},
 }
 
+# ─── Permissions ─────────────────────────────────────────────────────────
+# OpenWA Session carries a company; without this a list query ignored it.
+permission_query_conditions = {
+	"OpenWA Session":
+		"frappe_whatsapp_openwa.utils.session_permissions"
+		".get_openwa_session_permission_query_conditions",
+}
+
 # ─── Scheduled jobs ──────────────────────────────────────────────────────
 scheduler_events = {
 	"cron": {

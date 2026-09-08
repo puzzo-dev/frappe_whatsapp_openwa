@@ -1,6 +1,11 @@
 import frappe
 
-from frappe_whatsapp_openwa.utils.settings import session_limit
+from frappe_whatsapp_openwa.utils.settings import limit
+
+
+def _default_restart_attempts() -> int:
+	"""The gateway-wide restart ceiling, read once per run rather than per session."""
+	return limit("max_restart_attempts", 3)
 
 
 def heal_disconnected_sessions():
@@ -32,7 +37,13 @@ def _do_heal():
 			"gateway_session_id": ["is", "set"],
 			"skip_auto_heal": 0,
 		},
-		fields=["name", "gateway_session_id", "restart_attempt_count", "disconnect_grace_until"],
+		# max_restart_attempts selected here rather than read per session: it is
+		# a column on the row this query already returns, and session_limit was
+		# issuing its own get_value for each one inside the loop.
+		fields=[
+			"name", "gateway_session_id", "restart_attempt_count",
+			"disconnect_grace_until", "max_restart_attempts",
+		],
 	)
 	if not sessions:
 		return
@@ -83,7 +94,9 @@ def _do_heal():
 
 		# Each number gets its own patience: a flaky one can be given more
 		# attempts without loosening every other session.
-		max_restart_attempts = session_limit(s.name, "max_restart_attempts", 3)
+		# The session's own value when it has one, else the gateway default —
+		# the same rule session_limit applies, without the extra read.
+		max_restart_attempts = s.max_restart_attempts or _default_restart_attempts()
 		attempts = s.restart_attempt_count or 0
 		if attempts >= max_restart_attempts:
 			frappe.db.set_value(

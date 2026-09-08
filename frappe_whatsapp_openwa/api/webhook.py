@@ -23,7 +23,11 @@ def receive():
 	  - message.ack       → update WhatsApp Message status
 	  - Redis idempotency (24h TTL) per message_id
 	"""
-	settings = frappe.get_single("OpenWA Gateway Settings")
+	# get_cached_doc, not get_single. This runs on every inbound event — and on
+	# every forged one — and get_single builds the document from the Singles
+	# table each time. The cached copy is invalidated when the Single is saved,
+	# which is the only thing that changes it.
+	settings = frappe.get_cached_doc("OpenWA Gateway Settings")
 	payload = _parse_and_verify(settings)
 
 	event = payload.get("event", "")
