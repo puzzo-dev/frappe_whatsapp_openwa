@@ -70,14 +70,28 @@ def after_migrate():
 	"""
 	from frappe_whatsapp_openwa.utils.standard_notifications import ensure_importable
 
-	repaired = ensure_importable(["WhatsApp Dual Gateway"])
-	if repaired:
+	result = ensure_importable(["WhatsApp Dual Gateway"])
+
+	if result["repaired"]:
 		frappe.log_error(
 			title="OpenWA: repaired standard notification modules",
 			message=(
 				"Created the missing module files for: "
-				+ ", ".join(repaired)
+				+ ", ".join(result["repaired"])
 				+ ". Restart the bench so running workers pick them up — Python "
 				"caches a failed import, and migrate does not restart workers."
+			),
+		)
+
+	if result["demoted"]:
+		frappe.log_error(
+			title="OpenWA: demoted orphaned standard notifications",
+			message=(
+				"These Notifications were marked standard but this release does not "
+				"ship a definition for them: "
+				+ ", ".join(result["demoted"])
+				+ ". They are now ordinary Notifications — they still run, and they "
+				"no longer fail the saves they are attached to. Delete them if they "
+				"are left over from an older release."
 			),
 		)

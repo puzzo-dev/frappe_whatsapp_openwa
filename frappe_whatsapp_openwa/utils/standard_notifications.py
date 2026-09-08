@@ -1,4 +1,4 @@
-"""Keep standard Notifications importable.
+"""Keep standard Notifications importable, without inventing ones we don't ship.
 
 Frappe imports a Python module for every Notification marked `is_standard`
 before it sends one — `<app>/<module>/notification/<name>/<name>.py`. If that
@@ -8,12 +8,21 @@ fails the document save that triggered it. A notification on a Value Change of
 OpenWA Session therefore broke every save of a session, including the status
 poll the form makes on its own.
 
-Files can go missing in ordinary ways — a Notification created in developer
-mode is marked standard but its folder is only written on save, a partial
-checkout, a record restored from a backup without the app files. So rather than
-trust that they are there, migrate checks and writes whatever is absent.
+The app is the source of truth for its standard Notifications: what it ships in
+`notification/` is the complete set. So the repair runs in that direction —
+over the folders on disk, filling in the package files a partial checkout or a
+restored backup might be missing.
 
-This does not help a process that already tried the import and cached the miss;
+It deliberately does not run the other way. Writing a folder for a database
+record the release does not ship exports that record back into the app source,
+where `frappe.model.sync` finds it on the next migrate and re-creates it — so a
+notification the release dropped comes back, permanently, with the app now
+carrying a file for it. A standard record with no shipped definition is an
+orphan from an older release or from developer mode; it is demoted to
+non-standard instead, which stops the failing import at once, leaves the alert
+working (a non-standard Notification needs no module file), and deletes nothing.
+
+None of this helps a process that already tried the import and cached the miss;
 Python remembers a failed lookup, so a worker started before the files existed
 keeps failing until it restarts. `bench migrate` does not restart workers, which
 is why a release that adds a new Python subpackage needs one.
@@ -25,9 +34,14 @@ import os
 import frappe
 
 
-def ensure_importable(modules: list[str]) -> list[str]:
-	"""Create any missing notification package files. Returns what was repaired."""
-	repaired = []
+def ensure_importable(modules: list[str]) -> dict[str, list[str]]:
+	"""Repair the shipped notification packages and demote orphaned records.
+
+	Returns {"repaired": [...], "demoted": [...]} — both in
+	"<module>/<slug>" form, for the caller to report.
+	"""
+	repaired: list[str] = []
+	demoted: list[str] = []
 
 	for module in modules:
 		try:
@@ -35,19 +49,13 @@ def ensure_importable(modules: list[str]) -> list[str]:
 		except Exception:
 			continue
 
-		names = frappe.get_all(
-			"Notification",
-			filters={"module": module, "is_standard": 1},
-			pluck="name",
-		)
-		if not names:
-			continue
-
 		base = os.path.join(module_path, "notification")
-		_ensure_package(base)
+		shipped = _shipped_slugs(base)
 
-		for name in names:
-			slug = frappe.scrub(name)
+		if shipped:
+			_ensure_package(base)
+
+		for slug in shipped:
 			folder = os.path.join(base, slug)
 			_ensure_package(folder)
 
@@ -59,31 +67,41 @@ def ensure_importable(modules: list[str]) -> list[str]:
 					pass
 				repaired.append(f"{module}/{slug}")
 
-			# The definition itself. Only written when absent: migrate syncs
-			# JSON into the database, so exporting unconditionally would push
-			# the database back over a definition someone had just changed in
-			# git. Missing is the one case where the database is the only copy.
-			if not os.path.exists(os.path.join(folder, f"{slug}.json")):
-				try:
-					from frappe.modules.export_file import export_to_files
-
-					export_to_files(
-						record_list=[["Notification", name]],
-						record_module=module,
-						create_init=True,
-					)
-					repaired.append(f"{module}/{slug}.json")
-				except Exception:
-					frappe.log_error(
-						title=f"OpenWA: could not export notification {name}",
-						message=frappe.get_traceback(),
-					)
+		for name in _standard_notifications(module):
+			if frappe.scrub(name) in shipped:
+				continue
+			frappe.db.set_value("Notification", name, "is_standard", 0, update_modified=False)
+			demoted.append(f"{module}/{name}")
 
 	if repaired:
 		# So this process picks up what was just written.
 		importlib.invalidate_caches()
 
-	return repaired
+	return {"repaired": repaired, "demoted": demoted}
+
+
+def _shipped_slugs(base: str) -> set[str]:
+	"""Notification folders the app actually ships — those carrying a definition.
+
+	A folder with only package files is residue from the export this module used
+	to perform; it defines nothing, so it does not count as shipped.
+	"""
+	if not os.path.isdir(base):
+		return set()
+	return {
+		entry
+		for entry in os.listdir(base)
+		if os.path.isfile(os.path.join(base, entry, f"{entry}.json"))
+	}
+
+
+def _standard_notifications(module: str) -> list[str]:
+	try:
+		return frappe.get_all(
+			"Notification", filters={"module": module, "is_standard": 1}, pluck="name"
+		)
+	except Exception:
+		return []
 
 
 def _ensure_package(path: str) -> None:
