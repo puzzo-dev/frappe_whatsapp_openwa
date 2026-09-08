@@ -10,7 +10,7 @@
  "enabled": 1,
  "event": "Custom",
  "idx": 0,
- "is_standard": 1,
+ "is_standard": 0,
  "message": "<p>A WhatsApp message has permanently failed after exhausting all retries.</p><table border=\"1\" cellpadding=\"4\"><tr><th>Field</th><th>Value</th></tr><tr><td>Log</td><td>{{ doc.name }}</td></tr><tr><td>Account</td><td>{{ doc.whatsapp_account }}</td></tr><tr><td>Recipient</td><td>{{ doc.recipient_phone }}</td></tr><tr><td>Reason</td><td>{{ doc.failure_reason }}</td></tr><tr><td>Time</td><td>{{ doc.triggered_at }}</td></tr></table><p>Review and retry from <a href=\"{{ frappe.utils.get_url() }}/app/whatsapp-fallback-log/{{ doc.name }}\">WhatsApp Fallback Log</a>.</p>",
  "modified": "2026-07-16 22:30:56.794747",
  "modified_by": "Administrator",
