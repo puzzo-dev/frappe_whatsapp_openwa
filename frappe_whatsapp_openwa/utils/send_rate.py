@@ -36,29 +36,16 @@ def _session_allowance(session_name: str) -> int:
 def _consume(key: str, allowance: int, window: int) -> bool:
 	"""Take one slot from a sliding window. False when the window is full.
 
-	The window is read before anything is added, so a refused send does not
-	consume a slot it was never granted — otherwise a caller that keeps trying
-	holds its own limit down and never recovers.
+	A refused send takes nothing, so a caller that keeps trying does not hold
+	its own limit down and never recover. Reading and adding used to be two
+	round trips, which left room for two workers to both see the last slot free
+	and both take it — precisely under the load the limit exists for. It is one
+	atomic operation now; see utils/sliding_window.
 	"""
-	if allowance <= 0:
-		return True
+	from frappe_whatsapp_openwa.utils.sliding_window import take_slot
 
-	now = frappe.utils.now_datetime().timestamp()
-	full_key = frappe.cache.make_key(key)
-
-	pipe = frappe.cache.pipeline()
-	pipe.zremrangebyscore(full_key, "-inf", now - window)
-	pipe.zcard(full_key)
-	_, used = pipe.execute()
-
-	if used >= allowance:
-		return False
-
-	pipe = frappe.cache.pipeline()
-	pipe.zadd(full_key, {f"{now}": now})
-	pipe.expire(full_key, window)
-	pipe.execute()
-	return True
+	granted, _ = take_slot(key, allowance, window)
+	return granted
 
 
 def consume_send_slot(session_name: str) -> bool:
@@ -95,12 +82,11 @@ def has_rate_headroom(session_name: str) -> bool:
 		return True
 
 	try:
-		now = frappe.utils.now_datetime().timestamp()
-		key = frappe.cache.make_key(f"openwa:sendrate:session:{session_name}")
-		pipe = frappe.cache.pipeline()
-		pipe.zremrangebyscore(key, "-inf", now - _window_seconds(session_name))
-		pipe.zcard(key)
-		_, used = pipe.execute()
+		from frappe_whatsapp_openwa.utils.sliding_window import calls_in_window
+
+		used = calls_in_window(
+			f"openwa:sendrate:session:{session_name}", _window_seconds(session_name)
+		)
 		return used < allowance
 	except Exception:
 		# Redis trouble must not make every session look unusable.

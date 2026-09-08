@@ -89,8 +89,13 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			super().send_outgoing()
 			return
 
-		self._check_meta_rate_limit(self.whatsapp_account)
-
+		# No Meta rate check here. It used to run before routing had decided
+		# anything, so every OpenWA send spent a slot in Meta's window — a
+		# campaign that never touches Meta could exhaust the account's Meta
+		# budget and start refusing the messages that genuinely need it — and
+		# every Meta send spent two, because each Meta branch below checks
+		# again. The check belongs immediately before a Meta dispatch, which is
+		# where each branch now does it.
 		try:
 			from frappe_whatsapp_openwa.routing.campaign import campaign_routing
 			from frappe_whatsapp_openwa.routing.resolver import resolve_provider

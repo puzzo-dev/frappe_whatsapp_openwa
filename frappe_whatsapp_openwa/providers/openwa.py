@@ -31,19 +31,37 @@ class OpenWAAdapter(WhatsAppProvider):
 		api_key: str,
 		session_id: str,
 		retry_network_errors: bool = True,
+		client: httpx.Client | None = None,
 	):
 		self.base = gateway_url.rstrip("/")
 		self.session_id = session_id
 		# The queue worker turns this off: it retries the whole message itself,
 		# so retrying here as well just multiplies the calls (see retry.py).
 		self.retry_network_errors = retry_network_errors
-		self._client = httpx.Client(
+
+		# A caller that has a pooled client passes it in. One adapter is built
+		# per message, and building a client here meant a fresh TCP and TLS
+		# handshake for every send plus a connection pool that nothing ever
+		# closed — at campaign volume that is thousands of leaked pools and file
+		# descriptors, and a handshake on the critical path of each message.
+		# routing.router passes the shared client from utils.gateway.
+		#
+		# The private one remains for direct construction, which is what the
+		# tests do: this module stays free of Frappe imports so it can be
+		# exercised without a site.
+		self._owns_client = client is None
+		self._client = client or httpx.Client(
 			timeout=httpx.Timeout(connect=2.0, read=5.0, write=5.0, pool=2.0),
 			headers={
 				"X-API-Key": api_key,
 				"Authorization": f"Bearer {api_key}",
 			},
 		)
+
+	def close(self) -> None:
+		"""Close the client, but only if this adapter created it."""
+		if self._owns_client:
+			self._client.close()
 
 	# ── Public API ────────────────────────────────────────────────────────
 

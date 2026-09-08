@@ -233,8 +233,30 @@ def _handle_inbound_message(payload: dict, log, settings) -> None:
 		log.save(ignore_permissions=True)
 		return
 
+	# From here the claim is held, so every path out has to give it back.
+	#
+	# It has to be taken before the insert — that is what stops two concurrent
+	# deliveries of the same message from both creating a row — but taking it
+	# early means a failure after this point leaves it held. The delivery claim
+	# is released by the caller on error, so the gateway's retry gets past that
+	# gate and then finds *this* claim still standing, reports "duplicate", and
+	# the message is dropped for good. An error that was recoverable becomes a
+	# silently lost inbound message.
+	try:
+		_store_inbound_message(payload, log, settings, normalized, message_id)
+	except Exception:
+		release_event("message", message_id)
+		raise
+
+
+def _store_inbound_message(payload: dict, log, settings, normalized: dict, message_id: str) -> None:
 	account_name = _resolve_account_for_session(payload.get("sessionId", ""))
 	if not account_name:
+		# Nothing was written, and nothing will be: releasing lets a later
+		# delivery of the same message succeed once the account exists.
+		from frappe_whatsapp_openwa.utils.idempotency import release_event
+
+		release_event("message", message_id)
 		log.error_message = f"No account found for session {payload.get('sessionId')}"
 		log.save(ignore_permissions=True)
 		return

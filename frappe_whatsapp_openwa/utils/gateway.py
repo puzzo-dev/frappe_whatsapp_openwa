@@ -52,11 +52,21 @@ WEBHOOK_EVENTS = [
 _CLIENTS: dict[tuple, httpx.Client] = {}
 
 
-def get_gateway_client(timeout: float = 10.0) -> httpx.Client:
+# The send path wants a tighter, split timeout than a health poll: connect fast,
+# give the gateway a few seconds to answer, and never queue behind the pool for
+# long. Expressed as a tuple so it stays hashable and can be part of the pool key.
+SEND_TIMEOUT = (2.0, 5.0, 5.0, 2.0)
+
+
+def get_gateway_client(timeout: float | tuple = 10.0) -> httpx.Client:
 	"""Return a pooled httpx client for the configured gateway.
 
 	Auth is sent as X-API-Key (the gateway's documented header); Authorization
 	is included as well since the gateway also accepts Bearer tokens.
+
+	`timeout` is either a single number or a (connect, read, write, pool) tuple
+	for callers that want them set separately — SEND_TIMEOUT is the one the
+	message path uses.
 
 	The client is shared, so callers must not close it. httpx.Client is safe to
 	use from several threads.
@@ -81,7 +91,11 @@ def get_gateway_client(timeout: float = 10.0) -> httpx.Client:
 			"X-API-Key": api_key,
 			"Authorization": f"Bearer {api_key}",
 		},
-		timeout=timeout,
+		timeout=(
+			httpx.Timeout(connect=timeout[0], read=timeout[1], write=timeout[2], pool=timeout[3])
+			if isinstance(timeout, tuple)
+			else timeout
+		),
 	)
 	# Rotating the URL or key produces a new key, so the stale client would sit
 	# here holding sockets open. Only one configuration is ever live per site.

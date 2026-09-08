@@ -23,18 +23,18 @@ def check_rate_limit(account_name: str, action: str = "meta_send") -> tuple[bool
 	window = settings.get("meta_rate_limit_window_seconds") or _DEFAULT_WINDOW_SECONDS
 	max_calls = settings.get("meta_rate_limit_max_calls") or _DEFAULT_MAX_CALLS
 
-	# make_key prefixes the site's db_name so the window is tenant-scoped.
-	key = frappe.cache.make_key(f"openwa:ratelimit:meta:{action}:{account_name}")
-	now = frappe.utils.now_datetime().timestamp()
-	pipe = frappe.cache.pipeline()
-	pipe.zremrangebyscore(key, "-inf", now - window)
-	pipe.zrange(key, 0, -1, withscores=True)
-	pipe.zadd(key, {str(now): now})
-	pipe.expire(key, window)
-	_, current, _, _ = pipe.execute()
-	count = len(current)
+	# One atomic take: trim, count, and add only if there is room. This used to
+	# be four pipelined commands with the add unconditional, so a refused call
+	# still spent a slot — a caller that kept retrying held its own window full
+	# and never recovered. And because the count was read in the same pipeline
+	# as the add rather than under one lock, two workers could both see room and
+	# both take the last slot. See utils/sliding_window.
+	from frappe_whatsapp_openwa.utils.sliding_window import take_slot
 
-	allowed = count < max_calls
+	allowed, count = take_slot(
+		f"openwa:ratelimit:meta:{action}:{account_name}", max_calls, window
+	)
+
 	context = {
 		"allowed": allowed,
 		"window_seconds": window,

@@ -56,6 +56,7 @@ class TestRouteSendText:
 			patch("frappe_whatsapp_openwa.routing.router.frappe.get_doc", side_effect=_get_doc),
 			patch("frappe_whatsapp_openwa.routing.router.frappe.get_single", side_effect=_get_single),
 			patch("frappe_whatsapp_openwa.routing.router.frappe.log_error"),
+			patch("frappe_whatsapp_openwa.utils.gateway.get_gateway_client", return_value=MagicMock()),
 			patch("frappe_whatsapp_openwa.routing.fallback.frappe.get_single", side_effect=_get_single),
 			patch("frappe_whatsapp_openwa.routing.fallback.frappe.new_doc", return_value=MagicMock()),
 			patch("frappe_whatsapp_openwa.routing.fallback.frappe.db", MagicMock()),
@@ -94,6 +95,7 @@ class TestRouteSendText:
 					gateway_base_url="http://t", get_password=lambda x: "k"
 				)),
 				patch("frappe_whatsapp_openwa.routing.router.frappe.log_error"),
+				patch("frappe_whatsapp_openwa.utils.gateway.get_gateway_client", return_value=MagicMock()),
 			):
 				result = route_send_text("Test Account", "+234", "Hello")
 			assert result.success is False
@@ -114,6 +116,7 @@ class TestRouteSendText:
 					gateway_base_url="http://t", get_password=lambda x: "k"
 				)),
 				patch("frappe_whatsapp_openwa.routing.router.frappe.log_error"),
+				patch("frappe_whatsapp_openwa.utils.gateway.get_gateway_client", return_value=MagicMock()),
 				patch("frappe_whatsapp_openwa.routing.router.should_fallback", return_value=True),
 				patch("frappe_whatsapp_openwa.routing.router.run_fallback", return_value=_ok("meta")) as mock_fallback,
 			):

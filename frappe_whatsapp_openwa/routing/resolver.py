@@ -284,7 +284,17 @@ def _record_unavailable(account: str, reason: str) -> None:
 	box: that is a document, so a Frappe Notification on it delivers the alert
 	through whatever channel and recipients the site has configured, and stops
 	when that Notification is disabled.
+
+	One row per account per window, not one per message. This fires when *no*
+	session can carry a message, which is exactly the condition that holds for
+	every message of a campaign at once — so it used to insert a full document
+	per message, thousands a minute, burying the incident it was reporting in
+	its own noise and hammering the database during an outage. The alert says
+	the gateway is unavailable; saying it once is the whole message.
 	"""
+	if not _claim_unavailable_report(account):
+		return
+
 	try:
 		entry = frappe.get_doc({
 			"doctype": "WhatsApp Fallback Log",
@@ -306,6 +316,25 @@ def _record_unavailable(account: str, reason: str) -> None:
 			title="OpenWA: could not record gateway unavailability",
 			message=frappe.get_traceback(),
 		)
+
+
+_UNAVAILABLE_REPORT_TTL = 300
+
+
+def _claim_unavailable_report(account: str) -> bool:
+	"""True the first time this account is reported unavailable in the window.
+
+	Fails open: if the cache cannot answer, the row is written. Losing the alert
+	is worse than writing it twice.
+	"""
+	try:
+		key = f"openwa:unavailable_reported:{account}"
+		if frappe.cache.get_value(key, expires=True):
+			return False
+		frappe.cache.set_value(key, 1, expires_in_sec=_UNAVAILABLE_REPORT_TTL)
+		return True
+	except Exception:
+		return True
 
 
 def _account_sessions(account: str) -> list[dict]:

@@ -232,3 +232,39 @@ class TestQueuedCampaignKeepsItsPool:
 			doc._enqueue_for_later("sess-1")
 
 		assert enqueue.call_args.kwargs["payload"]["campaign"] == "BULK-WA-2026-00001"
+
+
+class TestUnavailabilityIsReportedOnce:
+	"""The condition holds for every message of a campaign at once.
+
+	Reporting per message inserted thousands of documents a minute during an
+	outage — burying the incident in its own noise and hammering the database
+	at the worst possible time.
+	"""
+
+	def _record(self, cache):
+		import frappe as _frappe
+		from frappe_whatsapp_openwa.routing import resolver
+
+		with patch.object(_frappe, "cache", cache), \
+			patch.object(_frappe, "get_doc", create=True) as get_doc, \
+			patch.object(_frappe, "log_error", create=True), \
+			patch.object(_frappe, "utils", create=True):
+			resolver._record_unavailable("Acct", "no session")
+		return get_doc
+
+	def test_first_report_is_written(self):
+		cache = MagicMock()
+		cache.get_value.return_value = None
+		assert self._record(cache).called
+
+	def test_second_report_in_the_window_is_suppressed(self):
+		cache = MagicMock()
+		cache.get_value.return_value = 1
+		assert not self._record(cache).called
+
+	def test_a_cache_failure_still_reports(self):
+		"""Losing the alert is worse than writing it twice."""
+		cache = MagicMock()
+		cache.get_value.side_effect = RuntimeError("redis down")
+		assert self._record(cache).called

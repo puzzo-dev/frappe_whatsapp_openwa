@@ -147,6 +147,8 @@ def _build_openwa_adapter(
 	if not session_name:
 		return None
 	try:
+		from frappe_whatsapp_openwa.utils.gateway import SEND_TIMEOUT, get_gateway_client
+
 		settings = frappe.get_single("OpenWA Gateway Settings")
 		session = frappe.get_doc("OpenWA Session", session_name)
 		return OpenWAAdapter(
@@ -154,6 +156,10 @@ def _build_openwa_adapter(
 			api_key=settings.get_password("gateway_api_key"),
 			session_id=session.gateway_session_id or session_name,
 			retry_network_errors=adapter_retries,
+			# Pooled: an adapter is built per message, and one client per
+			# adapter meant a TCP and TLS handshake on every send and a
+			# connection pool that was never closed.
+			client=get_gateway_client(timeout=SEND_TIMEOUT),
 		)
 	except Exception as e:
 		frappe.log_error(title="OpenWA adapter build failed", message=str(e))

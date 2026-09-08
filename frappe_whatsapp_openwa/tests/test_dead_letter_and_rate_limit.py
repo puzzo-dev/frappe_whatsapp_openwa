@@ -49,33 +49,47 @@ class TestDeadLetterHandling(unittest.TestCase):
 
 class TestMetaRateLimiter(unittest.TestCase):
 
-	def _setup_mocks(self, mock_frappe, max_calls, window, pipeline_result):
+	def _limiter(self, mock_frappe, max_calls, window, already_used):
+		"""Run check_rate_limit against a window double holding `already_used` calls."""
+		from frappe_whatsapp_openwa.tests.fake_window import FakeWindow
+
 		# settings.get(...) is used in the rate limiter — a plain dict matches that contract.
 		mock_frappe.get_single.return_value = {
 			"meta_rate_limit_window_seconds": window,
 			"meta_rate_limit_max_calls": max_calls,
 		}
-		mock_frappe.cache.make_key = lambda key, **kw: key
-		mock_frappe.cache.pipeline.return_value.execute.return_value = pipeline_result
-		mock_frappe.utils.now_datetime.return_value.timestamp.return_value = 1000.0
+		fake = FakeWindow()
+		key = "openwa:ratelimit:meta:meta_send:WA-001"
+		fake.preload(key, already_used)
+		with patch("frappe_whatsapp_openwa.utils.sliding_window.take_slot",
+		           side_effect=fake.take_slot):
+			return check_rate_limit("WA-001"), fake, key
 
 	@patch("frappe_whatsapp_openwa.utils.rate_limiter.frappe")
 	def test_rate_limit_allows_within_window(self, mock_frappe):
-		self._setup_mocks(mock_frappe, max_calls=100, window=60,
-			pipeline_result=[None, [], None, None])
-
-		allowed, context = check_rate_limit("WA-001")
+		(allowed, context), _, _ = self._limiter(mock_frappe, 100, 60, already_used=0)
 
 		self.assertTrue(allowed)
 		self.assertEqual(context["max_calls"], 100)
-		self.assertEqual(context["current_calls"], 0)
+		self.assertEqual(context["current_calls"], 1, "the granted call counts itself")
 
 	@patch("frappe_whatsapp_openwa.utils.rate_limiter.frappe")
 	def test_rate_limit_blocks_when_window_full(self, mock_frappe):
-		self._setup_mocks(mock_frappe, max_calls=2, window=60,
-			pipeline_result=[None, [("a", 1), ("b", 2)], None, None])
-
-		allowed, context = check_rate_limit("WA-001")
+		(allowed, context), _, _ = self._limiter(mock_frappe, 2, 60, already_used=2)
 
 		self.assertFalse(allowed)
 		self.assertEqual(context["current_calls"], 2)
+
+	@patch("frappe_whatsapp_openwa.utils.rate_limiter.frappe")
+	def test_denied_call_does_not_consume_a_slot(self, mock_frappe):
+		"""The regression: the entry was added before the count was checked, so a
+		refused caller kept its own window full and could never recover."""
+		_, fake, key = self._limiter(mock_frappe, 2, 60, already_used=2)
+
+		self.assertEqual(len(fake.entries[key]), 2)
+
+	@patch("frappe_whatsapp_openwa.utils.rate_limiter.frappe")
+	def test_granted_call_consumes_exactly_one(self, mock_frappe):
+		_, fake, key = self._limiter(mock_frappe, 10, 60, already_used=4)
+
+		self.assertEqual(len(fake.entries[key]), 5)
