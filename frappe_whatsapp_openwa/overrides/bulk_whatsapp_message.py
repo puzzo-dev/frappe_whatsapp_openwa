@@ -31,6 +31,7 @@ except ImportError:  # pragma: no cover - only when frappe_whatsapp is absent
 class BulkWhatsAppMessageDualGateway(_UpstreamBase):
 	def validate(self):
 		super().validate()
+		self._authorize_account()
 		self._validate_openwa_routing()
 
 	def on_update(self):
@@ -48,6 +49,22 @@ class BulkWhatsAppMessageDualGateway(_UpstreamBase):
 		super().on_submit()
 
 	# ── Validation ───────────────────────────────────────────────────────
+
+	def _authorize_account(self):
+		"""A campaign sends as an account, so it takes the same check a send does.
+
+		The session and account ownership rules below govern which sessions may
+		carry the campaign; none of them asked whether this user may send as the
+		account at all, so a company-scoped user could point a campaign at
+		another company's account and have the traffic and cost attributed
+		there.
+		"""
+		if self.flags.ignore_permissions or not self.whatsapp_account:
+			return
+
+		from frappe_whatsapp_openwa.utils.authz import assert_can_send_from_account
+
+		assert_can_send_from_account(self.whatsapp_account)
 
 	def _validate_openwa_routing(self):
 		rows = self.get("custom_openwa_sessions") or []

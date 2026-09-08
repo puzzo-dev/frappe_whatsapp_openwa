@@ -70,8 +70,18 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
             super().notify(data, doc_data)
             return
 
-        self._check_meta_rate_limit(account_name)
-
+        # No Meta rate check before routing — same defect as the message
+        # controller had: an OpenWA-bound notification spent a slot in Meta's
+        # window, and a Meta-bound one spent two, because each branch below
+        # checks again.
+        #
+        # Nor an account authorisation check. The account here is not
+        # client-supplied: it comes from the alert's own configuration, or from
+        # the reference document's company, and the alert fires for whichever
+        # user happened to touch that document — a portal user submitting a
+        # form, say. Requiring *them* to be able to send as the account would
+        # break the automation. The boundary is who may configure a WhatsApp
+        # Notification, which its own permissions govern.
         try:
             from frappe_whatsapp_openwa.routing.resolver import resolve_provider
             session_strategy = frappe.db.get_value(
@@ -175,7 +185,20 @@ class WhatsAppNotificationDualGateway(_UpstreamNotification):
             return None
 
     def _save_message_log(self, data: dict, doc_data, account_name: str, result) -> None:
-        """Create the WhatsApp Message record (mirrors upstream notify success block)."""
+        """Create the WhatsApp Message record (mirrors upstream notify success block).
+
+        Unless the send already created one. MetaAdapter dispatches through the
+        upstream WhatsApp Message controller, which inserts its own row, so a
+        notification that routed to Meta logged the same message twice — two
+        rows carrying one message_id, doubling every count and report built on
+        them. The OpenWA path inserts nothing itself, which is why this exists
+        at all.
+        """
+        if result.message_id and frappe.db.exists(
+            "WhatsApp Message", {"message_id": result.message_id}
+        ):
+            return
+
         dt = dn = None
         if doc_data:
             dt = doc_data.get("doctype") if isinstance(doc_data, dict) else getattr(doc_data, "doctype", None)

@@ -90,3 +90,38 @@ def is_safe_fetch_url(url: str, allowed_hosts: Iterable[str] = ()) -> bool:
 			return False
 
 	return True
+
+
+def assert_media_url_is_sendable(media_url: str) -> None:
+	"""Reject media URLs that would make the gateway probe the internal network.
+
+	The URL is handed to the OpenWA gateway, which fetches it. The gateway
+	normally sits inside the same private network as the bench, so an
+	unchecked URL lets a caller reach internal services and read the result
+	back through the delivered message.
+
+	This lived on the whitelisted send_media endpoint alone, which left every
+	other route to the same adapter unguarded: a WhatsApp Message carrying an
+	arbitrary `attach`, and the queue worker draining one. It is enforced in
+	routing.router now, which all of them go through.
+
+	A site's own /files/ URLs must keep working, and a self-hosted site is often
+	on a private address itself, so the site host is allowed explicitly rather
+	than being caught by the private-address rule. Relative URLs are site-local
+	by definition and are resolved against the site before checking.
+	"""
+	import frappe
+
+	if not media_url:
+		frappe.throw(frappe._("A media URL is required."), frappe.ValidationError)
+
+	site_url = frappe.utils.get_url()
+	url = media_url
+	if url.startswith("/"):
+		url = site_url.rstrip("/") + url
+
+	if not is_safe_fetch_url(url, allowed_hosts=[host_of(site_url)]):
+		frappe.throw(
+			frappe._("Media URL {0} is not allowed.").format(media_url),
+			frappe.ValidationError,
+		)

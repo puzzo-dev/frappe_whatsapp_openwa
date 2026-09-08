@@ -89,6 +89,19 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			super().send_outgoing()
 			return
 
+		# The account is an ordinary field on the document, so creating a
+		# WhatsApp Message was enough to send as any account on the site. The
+		# whitelisted endpoints authorised it and this path did not, which made
+		# the endpoints' check bypassable by writing the document directly.
+		#
+		# ignore_permissions is honoured for the same reason it is everywhere
+		# else here: the queue worker, the scheduler and the inbound webhook all
+		# create messages with no session user behind them.
+		if not self.flags.ignore_permissions:
+			from frappe_whatsapp_openwa.utils.authz import assert_can_send_from_account
+
+			assert_can_send_from_account(self.whatsapp_account)
+
 		# No Meta rate check here. It used to run before routing had decided
 		# anything, so every OpenWA send spent a slot in Meta's window — a
 		# campaign that never touches Meta could exhaust the account's Meta

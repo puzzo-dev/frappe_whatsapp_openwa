@@ -77,6 +77,14 @@ def route_send_media(
 	adapter_retries: bool = True,
 	session_override: str | None = None,
 ) -> SendResult:
+	# Enforced here rather than only on the whitelisted endpoint: a WhatsApp
+	# Message carrying an arbitrary `attach`, and the queue worker draining one,
+	# both reach the adapter without passing through that endpoint. The gateway
+	# is what fetches the URL, and it usually sits on the bench's own network.
+	from frappe_whatsapp_openwa.utils.urlguard import assert_media_url_is_sendable
+
+	assert_media_url_is_sendable(media_url)
+
 	_meta = meta_fallback_fn or (
 		lambda: MetaAdapter(account_name).send_media(to, media_url, caption, media_type, account_name)
 	)

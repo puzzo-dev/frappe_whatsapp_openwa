@@ -24,6 +24,9 @@ def _doc(message_id="", message_type="Text"):
 	d.to = "+2348012345678"
 	d.message = "hello"
 	d._dual_gateway_base_verified = True  # skip the upstream-import check
+	# Sends now authorise the account they send as; these tests are about the
+	# dispatch guard, so they run as the internal paths do.
+	d.flags = type("_F", (), {"ignore_permissions": True, "custom_ref_doc": None})()
 	return d
 
 

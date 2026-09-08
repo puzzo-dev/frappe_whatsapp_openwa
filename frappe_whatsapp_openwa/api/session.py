@@ -23,10 +23,20 @@ def get_status(session_name):
 	"""
 	doc = frappe.get_doc("OpenWA Session", session_name)
 	doc.check_permission("read")
-	_sync_from_gateway(doc, want_qr=True)
+
+	# The QR is a pairing credential, not a status. Whoever scans it links their
+	# own WhatsApp account to this session and can then send as it, so handing
+	# it out on a read gate gave every user who could see a session the ability
+	# to take it over. Reading the status is a read; claiming the session is a
+	# change to it.
+	may_pair = doc.has_permission("write")
+
+	_sync_from_gateway(doc, want_qr=may_pair)
 	return {
 		"status": doc.status,
-		"qr_code_data": doc.qr_code_data if doc.status == STATUS_QR_REQUIRED else "",
+		"qr_code_data": (
+			doc.qr_code_data if may_pair and doc.status == STATUS_QR_REQUIRED else ""
+		),
 		"requires_human_attention": doc.requires_human_attention,
 		"last_health_check": doc.last_health_check,
 	}

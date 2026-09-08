@@ -43,30 +43,8 @@ def send_media(account, to, media_url, caption=None, media_type="image", provide
 
 
 def _assert_media_url_is_sendable(media_url: str) -> None:
-	"""Reject media URLs that would make the gateway probe the internal network.
+	"""Kept as the endpoint's own name for it; the rule lives in utils.urlguard
+	so every send path enforces the same one."""
+	from frappe_whatsapp_openwa.utils.urlguard import assert_media_url_is_sendable
 
-	The URL is passed to the OpenWA gateway, which fetches it. The gateway
-	normally sits inside the same private network as the bench, so without this
-	an authenticated caller can use it to reach internal services and read the
-	result back through the delivered message (OWA-09).
-
-	A site's own /files/ URLs must keep working, and a self-hosted site is often
-	on a private address itself, so the site host is allowed explicitly rather
-	than being caught by the private-address rule. Relative URLs are site-local
-	by definition and are resolved against the site before checking.
-	"""
-	from frappe_whatsapp_openwa.utils.urlguard import host_of, is_safe_fetch_url
-
-	if not media_url:
-		frappe.throw(frappe._("A media URL is required."), frappe.ValidationError)
-
-	site_url = frappe.utils.get_url()
-	url = media_url
-	if url.startswith("/"):
-		url = site_url.rstrip("/") + url
-
-	if not is_safe_fetch_url(url, allowed_hosts=[host_of(site_url)]):
-		frappe.throw(
-			frappe._("Media URL {0} is not allowed.").format(media_url),
-			frappe.ValidationError,
-		)
+	assert_media_url_is_sendable(media_url)

@@ -159,6 +159,7 @@ class TestRouterHonoursTheResolvedSession:
 		from frappe_whatsapp_openwa.routing import router
 
 		with patch.object(router, "resolve_provider") as resolve, \
+			patch("frappe_whatsapp_openwa.utils.urlguard.assert_media_url_is_sendable"), \
 			patch.object(router, "_try_openwa_then_fallback") as attempt:
 			router.route_send_media(
 				"A", "+2348000000000", "http://x/y.png", None, "image",
