@@ -81,6 +81,12 @@ def provision_session_async(session_name: str) -> None:
 				},
 				update_modified=False,
 			)
+			# Committed, or it goes back with the transaction the exception is
+			# unwinding — which is the whole point of writing it. The operator
+			# was meant to see why no QR appeared, on the form; without this the
+			# field was set and immediately rolled back, and the only trace left
+			# was the Error Log this was written to improve on.
+			frappe.db.commit()
 		finally:
 			frappe.flags.openwa_sync = False
 

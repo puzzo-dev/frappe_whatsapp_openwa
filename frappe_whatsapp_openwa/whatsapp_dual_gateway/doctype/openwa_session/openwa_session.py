@@ -191,3 +191,15 @@ class OpenWASession(Document):
 		finally:
 			frappe.flags.openwa_sync = False
 		return {"status": "restart_issued"}
+
+
+def on_doctype_update():
+	"""Indexes for the columns every send and every inbound event filters on.
+
+	Declared here as the source of truth; patches/index_openwa_session covers
+	sites where the DocType is not reloaded during migrate, which is when this
+	hook does not fire.
+	"""
+	# gateway_session_id and status carry search_index on the field, so Frappe
+	# already indexes them; repeating them here would only duplicate.
+	frappe.db.add_index("OpenWA Session", ["linked_whatsapp_account"])
