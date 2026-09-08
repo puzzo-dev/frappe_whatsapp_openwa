@@ -10,7 +10,7 @@
  "enabled": 1,
  "event": "Value Change",
  "idx": 0,
- "is_standard": 1,
+ "is_standard": 0,
  "message": "<b>URGENT:</b> The WhatsApp number <b>{{ doc.phone_number }}</b> (session: {{ doc.session_name }}) has been <b>banned by WhatsApp</b>.\n\nA SIM swap is required before this number can be used again. Messages will not be delivered until the session is replaced.\n\n<a href=\"{{ frappe.utils.get_url() }}/app/openwa-session/{{ doc.name }}\">View Session</a>",
  "modified": "2026-07-16 22:30:56.735253",
  "modified_by": "Administrator",
