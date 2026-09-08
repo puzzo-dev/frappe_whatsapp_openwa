@@ -37,6 +37,7 @@ class _Harness:
 		self._patches = [
 			patch(f"{_WINDOW}.take_slot", side_effect=self.window.take_slot),
 			patch(f"{_WINDOW}.calls_in_window", side_effect=self.window.calls_in_window),
+			patch(f"{_WINDOW}.give_back", side_effect=self.window.give_back),
 			patch(f"{_MODULE}.session_limit",
 			      side_effect=lambda name, f, d, **k: self.per_session[f]),
 			patch(f"{_MODULE}.limit", side_effect=lambda f, d, **k: self.gateway_allowance),
@@ -121,6 +122,35 @@ class TestHeadroomTakesNothing(unittest.TestCase):
 		with _Harness(used=3, default_allowance=20) as h:
 			self.assertTrue(has_rate_headroom("sess-1"))
 			self.assertEqual(h.used(), 3)
+
+
+class TestReleaseSendSlot(unittest.TestCase):
+	"""A message that never went out on this number must not pace it."""
+
+	def test_release_gives_the_session_slot_back(self):
+		with _Harness(used=0, default_allowance=20) as h:
+			from frappe_whatsapp_openwa.utils.send_rate import release_send_slot
+
+			h.consume()
+			self.assertEqual(h.used(), 1)
+			release_send_slot("sess-1")
+			self.assertEqual(h.used(), 0, "a Meta fallback consumes no OpenWA rate")
+
+	def test_release_also_gives_back_the_gateway_slot(self):
+		with _Harness(used=0, default_allowance=20, gateway_allowance=10) as h:
+			from frappe_whatsapp_openwa.utils.send_rate import release_send_slot
+
+			h.consume()
+			self.assertEqual(h.used(_GATEWAY_KEY), 1)
+			release_send_slot("sess-1")
+			self.assertEqual(h.used(_GATEWAY_KEY), 0)
+
+	def test_release_on_a_blank_session_is_a_no_op(self):
+		with _Harness() as h:
+			from frappe_whatsapp_openwa.utils.send_rate import release_send_slot
+
+			release_send_slot("")
+			self.assertEqual(h.used(), 0)
 
 
 if __name__ == "__main__":

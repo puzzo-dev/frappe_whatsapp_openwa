@@ -59,8 +59,9 @@ def _resolve(ext, sessions=None, can_send=True, requested=None, strategy=None,
     with patch.object(_frappe, "db", db_mock), \
         patch.object(_frappe, "cache", cache_mock), \
         patch(f"{_RES}._account_sessions", return_value=sessions or []), \
-        patch(f"{_RES}.can_send", side_effect=can), \
-        patch(f"{_RES}._record_unavailable") as recorded:
+        patch(f"{_RES}.can_send", side_effect=lambda name, total=None: can(name)), \
+        patch("frappe_whatsapp_openwa.utils.session_cap.gateway_sent_today", return_value=0), \
+		patch(f"{_RES}._record_unavailable") as recorded:
         provider, session = resolve_provider(
             "Test Account", requested, strategy, mode_override
         )

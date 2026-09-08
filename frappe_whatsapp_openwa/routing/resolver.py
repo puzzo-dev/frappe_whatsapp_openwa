@@ -238,14 +238,20 @@ def _resolve_openwa(
 		_record_unavailable(account, "no OpenWA session is linked to this account")
 		return "meta", None
 
-	usable = [s for s in sessions if s["healthy"] and can_send(s["name"])]
+	# Worked out once, not once per candidate: the site-wide daily total is the
+	# same number whichever session is being asked about, and each candidate
+	# used to recompute it with its own full-table SUM.
+	from frappe_whatsapp_openwa.utils.session_cap import gateway_sent_today
+
+	sent_today = gateway_sent_today()
+	usable = [s for s in sessions if s["healthy"] and can_send(s["name"], sent_today)]
 	default = next((s for s in sessions if s["is_default"]), None)
 
 	if mode == "Message-level":
 		chosen = _spread(usable)
 	elif mode == "Hybrid":
 		# The default while it can send; otherwise anything else that can.
-		if default and default["healthy"] and can_send(default["name"]):
+		if default and default["healthy"] and can_send(default["name"], sent_today):
 			chosen = default["name"]
 		else:
 			chosen = _spread([s for s in usable if not s["is_default"]] or usable)

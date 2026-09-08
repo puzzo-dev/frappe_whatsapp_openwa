@@ -67,6 +67,28 @@ def consume_send_slot(session_name: str) -> bool:
 	return _consume(f"openwa:sendrate:session:{session_name}", _session_allowance(session_name), window)
 
 
+def release_send_slot(session_name: str) -> None:
+	"""Undo a consume_send_slot when the message did not go out over OpenWA.
+
+	A slot was taken from the session's window — and from the gateway-wide one
+	— before the send was attempted. When the send then falls back to Meta or
+	fails outright, nothing went out on this number, so holding those slots
+	throttles a healthy session for messages it never sent. During a campaign
+	with a Meta fallback that is most of them.
+
+	Both windows are given back, in the reverse order they were taken.
+	"""
+	if not session_name:
+		return
+
+	from frappe_whatsapp_openwa.utils.sliding_window import give_back
+
+	if _session_allowance(session_name) > 0:
+		give_back(f"openwa:sendrate:session:{session_name}")
+	if limit("gateway_send_rate_max", 0, zero_means_unlimited=True):
+		give_back("openwa:sendrate:gateway")
+
+
 def has_rate_headroom(session_name: str) -> bool:
 	"""True if this session could send right now, without taking a slot.
 

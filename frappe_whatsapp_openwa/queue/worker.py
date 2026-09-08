@@ -53,8 +53,11 @@ def _run_queue():
 
 	# Only pick rows whose next_attempt_at is due (NULL rows are always due).
 	queued = frappe.db.sql(
+		# payload is selected here rather than fetched per row: the batch is up
+		# to queue_batch_size rows and each one used to issue its own get_value
+		# for a column this query could have returned for free.
 		"""SELECT name, account, recipient, message_type, requested_provider,
-		          enqueued_at, max_age_minutes, attempts
+		          enqueued_at, max_age_minutes, attempts, payload
 		   FROM `tabWhatsApp Outbound Queue`
 		   WHERE status = 'Queued'
 		   AND (next_attempt_at IS NULL OR next_attempt_at <= %s)
@@ -89,9 +92,12 @@ def _process_row(row, now):
 	from frappe_whatsapp_openwa.utils.cache import is_session_alive
 
 	session_strategy = None
-	payload = frappe.parse_json(
-		frappe.db.get_value("WhatsApp Outbound Queue", row.name, "payload") or "{}"
-	)
+	# Carried on the row from the batch query. Falls back to a read for callers
+	# that hand in a row without it — the retry path builds one by hand.
+	raw = row.get("payload") if hasattr(row, "get") else None
+	if raw is None:
+		raw = frappe.db.get_value("WhatsApp Outbound Queue", row.name, "payload")
+	payload = frappe.parse_json(raw or "{}")
 	if row.message_type == "template":
 		tpl = (payload or {}).get("template")
 		if tpl:

@@ -72,6 +72,21 @@ def take_slot(key: str, allowance: int, window_seconds: int) -> tuple[bool, int]
 	return bool(granted), int(used)
 
 
+def give_back(key: str) -> bool:
+	"""Return the newest slot in the window. True if one was there to return.
+
+	Which entry is removed does not matter: they are interchangeable for
+	counting, and only their timestamps decide when they age out. Popping the
+	newest is the closest thing to undoing the take that just happened, and it
+	needs no token threaded back through the callers.
+	"""
+	try:
+		return bool(frappe.cache.zpopmax(frappe.cache.make_key(key), 1))
+	except Exception:
+		# A slot that cannot be handed back ages out of the window on its own.
+		return False
+
+
 def calls_in_window(key: str, window_seconds: int) -> int:
 	"""How full the window is right now, without taking anything from it."""
 	now = frappe.utils.now_datetime().timestamp()

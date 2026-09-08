@@ -237,6 +237,14 @@ def ensure_session_webhook_secret(session_name: str) -> str:
 			"OpenWA Session", session_name, secret, "webhook_secret"
 		)
 		frappe.db.commit()
+
+		# The verifier caches secrets by gateway session id; a stale entry would
+		# keep verifying against the key this just replaced.
+		from frappe_whatsapp_openwa.api.webhook import forget_session_secret
+
+		forget_session_secret(
+			frappe.db.get_value("OpenWA Session", session_name, "gateway_session_id")
+		)
 	return secret
 
 

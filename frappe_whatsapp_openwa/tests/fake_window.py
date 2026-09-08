@@ -33,5 +33,12 @@ class FakeWindow:
 	def calls_in_window(self, key: str, window_seconds: int) -> int:
 		return len(self._trim(key, window_seconds))
 
+	def give_back(self, key: str) -> bool:
+		entries = self.entries.get(key) or []
+		if not entries:
+			return False
+		entries.pop()
+		return True
+
 	def preload(self, key: str, count: int) -> None:
 		self.entries[key] = [self.now] * count

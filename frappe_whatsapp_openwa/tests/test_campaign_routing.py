@@ -58,7 +58,8 @@ def _resolve(sessions, mode_override=None, session_pool=None, cache=None):
 	with patch.object(_frappe, "db", db_mock), \
 		patch.object(_frappe, "cache", cache_mock), \
 		patch(f"{_RES}._account_sessions", return_value=sessions), \
-		patch(f"{_RES}.can_send", return_value=True), \
+		patch(f"{_RES}.can_send", side_effect=lambda name, total=None: True), \
+		patch("frappe_whatsapp_openwa.utils.session_cap.gateway_sent_today", return_value=0), \
 		patch(f"{_RES}._record_unavailable") as recorded:
 		provider, session = resolve_provider(
 			"Test Account", None, None,
@@ -134,8 +135,9 @@ class TestSpreadModesAreNotCached:
 		with patch.object(_frappe, "db", db_mock), \
 			patch.object(_frappe, "cache", cache), \
 			patch(f"{_RES}._account_sessions", return_value=_sessions(["s1", "s2"])), \
-			patch(f"{_RES}.can_send", return_value=True), \
-			patch(f"{_RES}._record_unavailable"):
+			patch(f"{_RES}.can_send", side_effect=lambda name, total=None: True), \
+			patch("frappe_whatsapp_openwa.utils.session_cap.gateway_sent_today", return_value=0), \
+		patch(f"{_RES}._record_unavailable"):
 			resolve_provider("Test Account", None, "Random Session")
 		assert not cache.set_value.called
 
@@ -268,3 +270,38 @@ class TestUnavailabilityIsReportedOnce:
 		cache = MagicMock()
 		cache.get_value.side_effect = RuntimeError("redis down")
 		assert self._record(cache).called
+
+
+class TestGatewayTotalIsComputedOnce:
+	"""The site-wide daily total is the same number for every candidate session.
+
+	Each candidate used to run its own full-table SUM over OpenWA Session, so an
+	account with ten numbers did ten identical aggregations before a single
+	message went out.
+	"""
+
+	def test_one_aggregation_however_many_sessions(self):
+		import frappe as _frappe
+		from frappe_whatsapp_openwa.utils import session_cap
+
+		calls = []
+
+		def _counted():
+			calls.append(1)
+			return 0
+
+		db = MagicMock()
+		db.get_value.return_value = _ext()
+		db.get_single_value.return_value = ""
+		cache = MagicMock()
+		cache.get_value.return_value = None
+
+		with patch.object(_frappe, "db", db), \
+			patch.object(_frappe, "cache", cache), \
+			patch(f"{_RES}._account_sessions", return_value=_sessions(["s1", "s2", "s3", "s4"])), \
+			patch(f"{_RES}.can_send", side_effect=lambda name, total=None: True), \
+			patch.object(session_cap, "gateway_sent_today", side_effect=_counted), \
+			patch(f"{_RES}._record_unavailable"):
+			resolve_provider("Test Account", None, None, mode_override="Message-level")
+
+		assert len(calls) == 1, f"expected one aggregation, got {len(calls)}"

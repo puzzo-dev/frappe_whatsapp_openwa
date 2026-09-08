@@ -101,9 +101,20 @@ def reserve_slot(session_name: str) -> bool:
 
 
 def release_slot(session_name: str) -> None:
-	"""Give back a slot claimed by reserve_slot when no OpenWA send happened."""
+	"""Give back what reserve_slot claimed, when no OpenWA send happened.
+
+	reserve_slot takes two things — a slot in the session's send-rate window and
+	one in the day's counter — and this used to give back only the counter. The
+	rate slot stayed spent, so a message that fell back to Meta or failed still
+	paced the session as though it had gone out on that number.
+	"""
 	if not session_name:
 		return
+
+	from frappe_whatsapp_openwa.utils.send_rate import release_send_slot
+
+	release_send_slot(session_name)
+
 	frappe.db.sql(
 		"""UPDATE `tabOpenWA Session`
 		   SET messages_sent_today = GREATEST(COALESCE(messages_sent_today, 0) - 1, 0)
@@ -151,11 +162,33 @@ def count_slot(session_name: str) -> None:
 	)
 
 
-def has_daily_headroom(session_name: str) -> bool:
+def gateway_sent_today() -> int:
+	"""Messages sent across every session today.
+
+	Its own function because selection asks the same question about each
+	candidate session, and the answer does not depend on which one is being
+	asked about — see can_send.
+	"""
+	try:
+		total = frappe.db.sql(
+			"SELECT COALESCE(SUM(messages_sent_today), 0) FROM `tabOpenWA Session`"
+		)[0][0]
+		return int(total or 0)
+	except Exception:
+		return 0
+
+
+def has_daily_headroom(session_name: str, gateway_total: int | None = None) -> bool:
 	"""True if this session is still under both daily ceilings.
 
 	Read-only, for choosing between sessions. reserve_slot remains the only
 	thing that claims, so selection cannot consume anyone's budget.
+
+	`gateway_total` lets a caller that is about to ask this of several sessions
+	work the site-wide sum out once. Without it, every candidate ran its own
+	full-table SUM over OpenWA Session — the same number, recomputed once per
+	session per message, which on an account with ten numbers is ten identical
+	aggregations before a single message goes out.
 	"""
 	if not session_name:
 		return True
@@ -166,17 +199,13 @@ def has_daily_headroom(session_name: str) -> bool:
 	ceiling = _daily_send_limit()
 	if not ceiling:
 		return True
-	try:
-		total = frappe.db.sql(
-			"SELECT COALESCE(SUM(messages_sent_today), 0) FROM `tabOpenWA Session`"
-		)[0][0]
-		return int(total or 0) < ceiling
-	except Exception:
-		return True
+
+	total = gateway_sent_today() if gateway_total is None else gateway_total
+	return total < ceiling
 
 
-def can_send(session_name: str) -> bool:
+def can_send(session_name: str, gateway_total: int | None = None) -> bool:
 	"""True if this session has room on pace and on volume."""
 	from frappe_whatsapp_openwa.utils.send_rate import has_rate_headroom
 
-	return has_rate_headroom(session_name) and has_daily_headroom(session_name)
+	return has_rate_headroom(session_name) and has_daily_headroom(session_name, gateway_total)

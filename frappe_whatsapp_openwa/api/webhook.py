@@ -105,6 +105,23 @@ def receive():
 	return {"status": "ok"}
 
 
+_SECRET_CACHE_TTL = 60
+
+
+def _secret_cache_key(gateway_session_id: str) -> str:
+	return f"openwa:webhook_secret:{gateway_session_id}"
+
+
+def forget_session_secret(gateway_session_id: str) -> None:
+	"""Drop the cached webhook secret for a session — call after rotating it."""
+	if not gateway_session_id:
+		return
+	try:
+		frappe.cache.delete_value(_secret_cache_key(gateway_session_id))
+	except Exception:
+		pass
+
+
 def _session_secret(session_id: str) -> str:
 	"""The secret this session's webhook is signed with, or "" if it has none.
 
@@ -120,17 +137,47 @@ def _session_secret(session_id: str) -> str:
 	"""
 	if not session_id:
 		return ""
+
+	# Cached briefly. This runs on every event, before verification, so it is
+	# also what an attacker spraying forged events makes us do: a lookup on a
+	# non-primary-key column plus an AES decrypt of the __Auth row, per event.
+	#
+	# The trade is that the secret sits in Redis for the TTL. That is a real
+	# widening and worth stating plainly rather than burying: it means Redis
+	# read access is enough to forge a webhook, where before it took the
+	# database plus the encryption key. It is judged acceptable because Redis
+	# already holds the session store on this bench — read access to it is
+	# already enough to impersonate a logged-in user — so the secret is not
+	# crossing a boundary it was previously behind. Rotation clears the entry
+	# (see api.provision.ensure_session_webhook_secret), and the TTL is short
+	# enough that a secret removed by hand stops working within the minute.
+	cache_key = _secret_cache_key(session_id)
+	try:
+		cached = frappe.cache.get_value(cache_key, expires=True)
+		if cached is not None:
+			return cached
+	except Exception:
+		cached = None
+
+	secret = ""
 	try:
 		from frappe.utils.password import get_decrypted_password
 
 		name = frappe.db.get_value("OpenWA Session", {"gateway_session_id": session_id}, "name")
-		if not name:
-			return ""
-		return (get_decrypted_password(
-			"OpenWA Session", name, "webhook_secret", raise_exception=False
-		) or "").strip()
+		if name:
+			secret = (get_decrypted_password(
+				"OpenWA Session", name, "webhook_secret", raise_exception=False
+			) or "").strip()
 	except Exception:
 		return ""
+
+	try:
+		# A miss is cached too, so an unknown session id cannot be used to force
+		# the lookup on every request.
+		frappe.cache.set_value(cache_key, secret, expires_in_sec=_SECRET_CACHE_TTL)
+	except Exception:
+		pass
+	return secret
 
 
 def _parse_and_verify(settings) -> dict:
@@ -233,34 +280,48 @@ def _handle_inbound_message(payload: dict, log, settings) -> None:
 		log.save(ignore_permissions=True)
 		return
 
-	# From here the claim is held, so every path out has to give it back.
-	#
-	# It has to be taken before the insert — that is what stops two concurrent
-	# deliveries of the same message from both creating a row — but taking it
-	# early means a failure after this point leaves it held. The delivery claim
-	# is released by the caller on error, so the gateway's retry gets past that
-	# gate and then finds *this* claim still standing, reports "duplicate", and
-	# the message is dropped for good. An error that was recoverable becomes a
-	# silently lost inbound message.
+	_store_inbound_message(payload, log, settings, normalized, message_id)
+
+
+def _store_inbound_message(payload: dict, log, settings, normalized: dict, message_id: str) -> None:
+	"""Persist one inbound message. The caller has already claimed message_id.
+
+	Whether a failure here gives the claim back depends on whether the row was
+	written, and the two cases pull in opposite directions:
+
+	  before the insert  Nothing exists. Holding the claim is what lost the
+	                     message: the caller releases the *delivery* claim on
+	                     error, so the gateway's retry clears that gate and then
+	                     finds this one still standing, reports "duplicate" and
+	                     drops the message for good.
+
+	  after the insert   The row exists and the caller commits it. Releasing
+	                     here would let the retry insert the same message a
+	                     second time — the duplicate the claim exists to stop.
+
+	So the claim is released only up to the insert, and held for good after it.
+	"""
+	from frappe_whatsapp_openwa.utils.idempotency import release_event
+
 	try:
-		_store_inbound_message(payload, log, settings, normalized, message_id)
+		account_name = _resolve_account_for_session(payload.get("sessionId", ""))
+		if not account_name:
+			# Nothing was written, and nothing will be: releasing lets a later
+			# delivery of the same message succeed once the account exists.
+			release_event("message", message_id)
+			log.error_message = f"No account found for session {payload.get('sessionId')}"
+			log.save(ignore_permissions=True)
+			return
+
+		msg_doc = _insert_inbound_message(normalized, message_id, account_name)
 	except Exception:
 		release_event("message", message_id)
 		raise
 
+	_after_inbound_message(msg_doc, normalized, log, settings)
 
-def _store_inbound_message(payload: dict, log, settings, normalized: dict, message_id: str) -> None:
-	account_name = _resolve_account_for_session(payload.get("sessionId", ""))
-	if not account_name:
-		# Nothing was written, and nothing will be: releasing lets a later
-		# delivery of the same message succeed once the account exists.
-		from frappe_whatsapp_openwa.utils.idempotency import release_event
 
-		release_event("message", message_id)
-		log.error_message = f"No account found for session {payload.get('sessionId')}"
-		log.save(ignore_permissions=True)
-		return
-
+def _insert_inbound_message(normalized: dict, message_id: str, account_name: str):
 	msg_doc = frappe.new_doc("WhatsApp Message")
 	msg_doc.update({
 		"type": normalized["type"],
@@ -281,7 +342,11 @@ def _store_inbound_message(payload: dict, log, settings, normalized: dict, messa
 		msg_doc.attach = normalized["attach"]
 
 	msg_doc.insert(ignore_permissions=True)
+	return msg_doc
 
+
+def _after_inbound_message(msg_doc, normalized: dict, log, settings) -> None:
+	"""Work that follows a stored message. The claim stays held from here on."""
 	if normalized.get("attach"):
 		# The download used to run inline, so the gateway waited on network and
 		# disk — up to max_media_bytes — before it got its 200, and a gateway
