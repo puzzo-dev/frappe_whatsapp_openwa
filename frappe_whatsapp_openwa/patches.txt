@@ -2,7 +2,13 @@
 # Patches added in this section will be executed before doctypes are migrated
 # Read docs to understand patches: https://frappeframework.com/docs/v14/user/en/database-migrations
 
+frappe_whatsapp_openwa.patches.normalise_session_phone_numbers
+
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
 frappe_whatsapp_openwa.patches.remap_session_statuses
 frappe_whatsapp_openwa.patches.add_performance_indexes
+frappe_whatsapp_openwa.patches.drop_fallback_alert_email
+frappe_whatsapp_openwa.patches.per_session_webhook_secrets
+frappe_whatsapp_openwa.patches.move_limits_to_sessions
+frappe_whatsapp_openwa.patches.drop_shared_webhook_secret

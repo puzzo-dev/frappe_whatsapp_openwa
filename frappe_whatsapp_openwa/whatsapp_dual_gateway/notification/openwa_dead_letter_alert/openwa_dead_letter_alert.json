@@ -1,0 +1,28 @@
+{
+ "attach_print": 0,
+ "channel": "Email",
+ "condition": "",
+ "creation": "2026-07-16 22:30:56.794747",
+ "days_in_advance": 0,
+ "docstatus": 0,
+ "doctype": "Notification",
+ "document_type": "WhatsApp Fallback Log",
+ "enabled": 1,
+ "event": "Custom",
+ "idx": 0,
+ "is_standard": 1,
+ "message": "<p>A WhatsApp message has permanently failed after exhausting all retries.</p><table border=\"1\" cellpadding=\"4\"><tr><th>Field</th><th>Value</th></tr><tr><td>Log</td><td>{{ doc.name }}</td></tr><tr><td>Account</td><td>{{ doc.whatsapp_account }}</td></tr><tr><td>Recipient</td><td>{{ doc.recipient_phone }}</td></tr><tr><td>Reason</td><td>{{ doc.failure_reason }}</td></tr><tr><td>Time</td><td>{{ doc.triggered_at }}</td></tr></table><p>Review and retry from <a href=\"{{ frappe.utils.get_url() }}/app/whatsapp-fallback-log/{{ doc.name }}\">WhatsApp Fallback Log</a>.</p>",
+ "modified": "2026-07-16 22:30:56.794747",
+ "modified_by": "Administrator",
+ "module": "WhatsApp Dual Gateway",
+ "name": "openwa-dead-letter-alert",
+ "owner": "Administrator",
+ "recipients": [
+  {
+   "receiver_by_role": "System Manager"
+  }
+ ],
+ "send_system_notification": 0,
+ "send_to_all_assignees": 0,
+ "subject": "WhatsApp Dead Letter: {{ doc.recipient_phone }} via {{ doc.whatsapp_account }}"
+}

@@ -16,6 +16,14 @@ class OpenWASession(Document):
 		flag, any change to ``status`` or ``gateway_session_id`` is rejected —
 		closing the REST-API and form manual-edit hole.
 		"""
+		# One WhatsApp number, one session.
+		#
+		# Normalised before the uniqueness check, because the constraint is on
+		# the stored string: +2348012345678, 08012345678 and 2348012345678 are
+		# the same number and would otherwise all be accepted as separate
+		# sessions, each trying to drive the same WhatsApp account.
+		self._normalise_phone_number()
+
 		if frappe.flags.get("openwa_sync"):
 			return
 
@@ -64,6 +72,52 @@ class OpenWASession(Document):
 			   AND name != %s""",
 			(self.linked_whatsapp_account, self.name),
 		)
+
+	def _normalise_phone_number(self) -> None:
+		"""Store the number in one canonical form so uniqueness means something."""
+		if not self.phone_number:
+			return
+
+		from frappe_whatsapp_openwa.utils.phone import normalise_e164
+
+		normalised = normalise_e164(self.phone_number)
+		if normalised and normalised != self.phone_number:
+			self.phone_number = normalised
+
+		# The unique index reports the collision, but not usefully: name the
+		# session already using this number so the operator can go to it.
+		existing = frappe.db.get_value(
+			"OpenWA Session",
+			{"phone_number": self.phone_number, "name": ("!=", self.name or "")},
+			["name", "session_name"],
+			as_dict=True,
+		)
+		if existing:
+			frappe.throw(
+				frappe._("{0} already uses {1}. One phone number drives one session — "
+				         "reconnect that session instead of creating another.").format(
+					existing.session_name or existing.name, self.phone_number
+				),
+				title=frappe._("Phone Number Already In Use"),
+			)
+
+	def on_trash(self):
+		"""Release the gateway session this document owns.
+
+		The gateway session outlives the document unless it is told otherwise,
+		and this document holds the only reference to it. Deleting without this
+		strands a live session on the gateway that nothing can reconnect or
+		reuse — they simply accumulate.
+
+		The id is captured before deletion because the row is about to go.
+		"""
+		gateway_session_id = self.gateway_session_id
+		if not gateway_session_id:
+			return
+
+		from frappe_whatsapp_openwa.api.provision import release_gateway_session
+
+		release_gateway_session(self.name, gateway_session_id)
 
 	def after_insert(self):
 		"""Provision on the gateway in the background.

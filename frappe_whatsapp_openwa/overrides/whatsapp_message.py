@@ -92,13 +92,27 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 		self._check_meta_rate_limit(self.whatsapp_account)
 
 		try:
+			from frappe_whatsapp_openwa.routing.campaign import campaign_routing
 			from frappe_whatsapp_openwa.routing.resolver import resolve_provider
 			session_strategy = None
 			if self.template:
 				session_strategy = frappe.db.get_value(
 					"WhatsApp Templates", self.template, "custom_session_strategy"
 				) or None
-			provider, session_name = resolve_provider(self.whatsapp_account, None, session_strategy)
+			# A campaign chooses its own routing mode and the numbers it may send
+			# from; the account's setting covers everything else. Read per message
+			# rather than stamped at queue time, so the choice of session sees the
+			# live send rate and daily cap instead of a guess made minutes earlier.
+			mode_override, session_pool = campaign_routing(
+				getattr(self, "bulk_message_reference", None)
+			)
+			provider, session_name = resolve_provider(
+				self.whatsapp_account,
+				None,
+				session_strategy,
+				mode_override=mode_override,
+				session_pool=session_pool,
+			)
 		except Exception:
 			frappe.log_error(
 				title="DualGateway: resolver error — falling back to Meta",
@@ -163,6 +177,7 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			to=self.to,
 			body=self.message or "",
 			meta_fallback_fn=self._meta_send_result,
+			session_override=session_name,
 		)
 		if result.success:
 			self.status = "Success"
@@ -206,6 +221,7 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 			body=text,
 			meta_fallback_fn=self._meta_send_result,
 			session_strategy=session_strategy,
+			session_override=session_name,
 		)
 		if result.success:
 			self.status = "Success"
@@ -327,6 +343,14 @@ class WhatsAppMessageDualGateway(_UpstreamBase):
 		else:
 			payload = {"body": self.message or "", "attach": self.attach or ""}
 			msg_type = self.content_type or "text"
+
+		# The queue row is not linked back to this message, so the campaign it
+		# belongs to has to travel in the payload — otherwise a message queued
+		# because its session was unhealthy would drain on whatever session the
+		# account allows, including one the campaign excluded.
+		campaign = getattr(self, "bulk_message_reference", None)
+		if campaign:
+			payload["campaign"] = campaign
 
 		queue_name = enqueue_message(
 			account=self.whatsapp_account,

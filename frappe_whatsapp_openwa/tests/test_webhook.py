@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from datetime import datetime
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -68,9 +69,31 @@ class TestParseAndVerify(unittest.TestCase):
 		frappe_mock.request = MagicMock()
 		frappe_mock.request.get_data.return_value = body
 		frappe_mock.request.headers = {"X-OpenWA-Signature": signature}
-		with patch("frappe_whatsapp_openwa.api.webhook.frappe", frappe_mock):
+		# The secret belongs to the session now, not the gateway.
+		with patch("frappe_whatsapp_openwa.api.webhook.frappe", frappe_mock), \
+			patch("frappe_whatsapp_openwa.api.webhook._session_secret", return_value=secret):
 			from frappe_whatsapp_openwa.api.webhook import _parse_and_verify
 			return _parse_and_verify(frappe_mock.get_single.return_value), frappe_mock
+
+	def test_session_without_a_secret_is_refused(self):
+		"""Fails closed: an unverifiable delivery is not accepted on trust."""
+		body = _payload_bytes("session.status")
+		frappe_mock = _make_frappe_mock()
+		frappe_mock.request = MagicMock()
+		frappe_mock.request.get_data.return_value = body
+		frappe_mock.request.headers = {"X-OpenWA-Signature": _sign(body)}
+		with patch("frappe_whatsapp_openwa.api.webhook.frappe", frappe_mock), \
+			patch("frappe_whatsapp_openwa.api.webhook._session_secret", return_value=""):
+			from frappe_whatsapp_openwa.api.webhook import _parse_and_verify
+			with self.assertRaises(Exception):
+				_parse_and_verify(frappe_mock.get_single.return_value)
+
+	def test_another_sessions_secret_does_not_verify(self):
+		"""One leaked secret must not authenticate a different session."""
+		body = _payload_bytes("session.status")
+		signed_with_other = _sign(body, secret="a-different-sessions-secret")
+		with self.assertRaises(Exception):
+			self._call(body, signed_with_other, secret="this-sessions-secret")
 
 	def test_valid_signature_returns_parsed_payload(self):
 		body = _payload_bytes("session.authenticated")
@@ -247,47 +270,66 @@ if __name__ == "__main__":
 	unittest.main()
 
 
-# ─── Session-event replay window (OWA-05) ────────────────────────────────────
+# ─── Replay and re-delivery ──────────────────────────────────────────────────
 
-class TestHandleSessionReplay(unittest.TestCase):
-	"""Session events carry no gateway id or timestamp, so the request signature
-	is the only replay token available. A repeated signature inside the window
-	must not reach the state machine."""
+class TestFreshness(unittest.TestCase):
+	"""The signed body carries an ISO-8601 dispatch time, so a captured request
+	expires instead of staying valid forever."""
 
-	def _run(self, set_result, signature="sha256=abc123"):
-		frappe_mock = _make_frappe_mock()
-		frappe_mock.request = MagicMock()
-		frappe_mock.request.headers = {"X-OpenWA-Signature": signature} if signature else {}
-		frappe_mock.cache.set.return_value = set_result
-
-		log = MagicMock()
-		payload = {"event": "session.disconnected", "sessionId": "sess-001"}
-
+	def _stale(self, timestamp, window=900, now="2026-09-08 12:00:00"):
+		frappe_mock = MagicMock()
+		frappe_mock.utils.get_datetime = lambda v: datetime.fromisoformat(str(v).replace("Z", ""))
+		frappe_mock.utils.now_datetime.return_value = datetime.fromisoformat(now)
 		with patch("frappe_whatsapp_openwa.api.webhook.frappe", frappe_mock), \
-			patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock), \
-			patch("frappe_whatsapp_openwa.monitoring.state.handle_session_event") as handler:
-			from frappe_whatsapp_openwa.api.webhook import _handle_session
-			_handle_session(payload, log)
-		return handler, log, frappe_mock
+			patch("frappe_whatsapp_openwa.api.webhook.limit", return_value=window):
+			from frappe_whatsapp_openwa.api.webhook import _is_stale
+			return _is_stale(timestamp)
 
-	def test_first_delivery_is_processed(self):
-		handler, log, _ = self._run(set_result=True)
-		handler.assert_called_once()
-		self.assertEqual(log.processed, 1)
+	def test_recent_delivery_is_fresh(self):
+		self.assertFalse(self._stale("2026-09-08 11:58:00"))
 
-	def test_replayed_signature_is_dropped(self):
-		"""SET NX returns None — the event was already seen, so it must not be replayed
-		into handle_session_event (which would flip a live session's status)."""
-		handler, log, _ = self._run(set_result=None)
-		handler.assert_not_called()
-		self.assertEqual(log.processed, 1)
+	def test_old_delivery_is_stale(self):
+		"""A request captured yesterday must not still work today."""
+		self.assertTrue(self._stale("2026-09-07 12:00:00"))
 
-	def test_replay_window_is_short(self):
-		"""A 24 h TTL would suppress genuine repeated flapping — the window must be short."""
-		_, _, frappe_mock = self._run(set_result=True)
-		self.assertEqual(frappe_mock.cache.set.call_args.kwargs["ex"], 60)
+	def test_boundary_is_inclusive_of_the_window(self):
+		self.assertFalse(self._stale("2026-09-08 11:45:00"))
 
-	def test_missing_signature_still_processed(self):
-		"""No signature header means no dedup token — fail open rather than drop events."""
-		handler, _, _ = self._run(set_result=True, signature="")
-		handler.assert_called_once()
+	def test_clock_skew_ahead_is_not_stale(self):
+		"""A gateway running slightly fast must not have its traffic rejected."""
+		self.assertFalse(self._stale("2026-09-08 12:05:00"))
+
+	def test_missing_timestamp_is_not_stale(self):
+		"""An older gateway sends none; the signature still guards the delivery."""
+		self.assertFalse(self._stale(None))
+		self.assertFalse(self._stale(""))
+
+	def test_unparseable_timestamp_is_not_stale(self):
+		self.assertFalse(self._stale("not a date"))
+
+
+class TestReleaseEvent(unittest.TestCase):
+	"""A claim is taken before the work, so a failure has to give it back."""
+
+	def test_release_deletes_the_claim(self):
+		frappe_mock = MagicMock()
+		frappe_mock.cache.make_key = lambda k, **kw: k
+		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
+			from frappe_whatsapp_openwa.utils.idempotency import release_event
+			release_event("delivery", "idem-1")
+		frappe_mock.cache.delete_value.assert_called_once()
+
+	def test_blank_key_is_a_no_op(self):
+		frappe_mock = MagicMock()
+		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
+			from frappe_whatsapp_openwa.utils.idempotency import release_event
+			release_event("delivery", "")
+		frappe_mock.cache.delete_value.assert_not_called()
+
+	def test_cache_failure_never_breaks_the_caller(self):
+		frappe_mock = MagicMock()
+		frappe_mock.cache.make_key = lambda k, **kw: k
+		frappe_mock.cache.delete_value.side_effect = Exception("redis down")
+		with patch("frappe_whatsapp_openwa.utils.idempotency.frappe", frappe_mock):
+			from frappe_whatsapp_openwa.utils.idempotency import release_event
+			release_event("delivery", "idem-1")  # must not raise

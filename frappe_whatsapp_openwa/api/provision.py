@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import frappe
 
+from frappe_whatsapp_openwa.utils.settings import limit
+
 # Per-user rate limit: max 10 provision/deprovision calls per hour.
-_PROVISION_RATE_LIMIT_MAX = 10
-_PROVISION_RATE_LIMIT_WINDOW = 3600  # seconds
 
 
 def _check_provision_rate_limit() -> None:
@@ -30,8 +30,8 @@ def _check_provision_rate_limit() -> None:
 	pipe.ttl(key)
 	count, ttl = pipe.execute()
 	if ttl < 0:
-		frappe.cache.expire(key, _PROVISION_RATE_LIMIT_WINDOW)
-	if count > _PROVISION_RATE_LIMIT_MAX:
+		frappe.cache.expire(key, limit("provision_rate_limit_window_seconds", 3600))
+	if count > limit("provision_rate_limit_max", 10):
 		frappe.throw(
 			frappe._("Too many provisioning requests. Please wait before trying again."),
 			frappe.TooManyRequestsError,
@@ -86,6 +86,14 @@ def provision_session_async(session_name: str) -> None:
 
 
 def _do_provision(doc) -> dict:
+	# Every route into the gateway passes through here, so the budget is checked
+	# here rather than only on the whitelisted endpoints. The background path had
+	# no limit at all: inserting sessions in bulk enqueued one unthrottled
+	# provision each, and every provision is five calls to the gateway (create,
+	# register webhook, start, fetch status, fetch QR). A loop or an import could
+	# put the dashboard under real load.
+	_check_provision_rate_limit()
+
 	if doc.gateway_session_id:
 		frappe.throw(
 			frappe._(f"Session is already registered on the gateway ({doc.gateway_session_id})."),
@@ -108,7 +116,23 @@ def _do_provision(doc) -> dict:
 
 	try:
 		session_id = _create_or_find_session(client, gateway_name)
-		_register_webhook(client, session_id)
+
+		# Record the gateway's id the moment it exists, before anything else can
+		# fail. It used to be written only after the webhook, the start call and
+		# two status fetches had all succeeded — so any error in between left a
+		# live session on the gateway that this doc had no reference to. The
+		# operator sees an unprovisioned session, deletes it, creates another,
+		# and the orphan stays running: sessions accumulate on the gateway with
+		# nothing pointing at them.
+		#
+		# db_set rather than save(): it writes the one column without the
+		# document lifecycle, so it cannot itself fail on validation and it
+		# survives the exception path below.
+		if session_id and doc.gateway_session_id != session_id:
+			doc.db_set("gateway_session_id", session_id, update_modified=False)
+			frappe.db.commit()
+
+		_register_webhook(client, session_id, session_name=doc.name)
 		_start_session(client, session_id)
 	except httpx.RequestError as e:
 		frappe.throw(
@@ -184,23 +208,86 @@ def _find_session_by_name(client, gateway_name: str) -> str | None:
 	return None
 
 
-def _register_webhook(client, session_id: str) -> None:
+def ensure_session_webhook_secret(session_name: str) -> str:
+	"""Return this session's webhook secret, generating one if it has none.
+
+	The gateway registers webhooks per session and signs each delivery with that
+	webhook's own secret, so there is no reason for every session to share one.
+	A per-session secret means the signature proves which session sent the
+	delivery rather than the body merely claiming it, contains a leak to one
+	number, and lets a single session be rotated on its own.
+
+	Stored as a Password field, so it is encrypted at rest and never rendered.
+	The gateway treats `secret` as write-only too and never reads it back.
+	"""
+	from frappe.utils.password import get_decrypted_password
+	from frappe.utils.password import set_encrypted_password
+	secret = None
+	try:
+		secret = get_decrypted_password(
+			"OpenWA Session", session_name, "webhook_secret", raise_exception=False
+		)
+	except Exception:
+		secret = None
+
+	if not secret:
+		# The gateway requires at least 16 characters.
+		secret = frappe.generate_hash(length=48)
+		set_encrypted_password(
+			"OpenWA Session", session_name, secret, "webhook_secret"
+		)
+		frappe.db.commit()
+	return secret
+
+
+def _register_webhook(client, session_id: str, session_name: str | None = None) -> None:
 	"""Point the gateway's webhook for this session at our inbound endpoint."""
 	from frappe_whatsapp_openwa.utils.gateway import WEBHOOK_EVENTS
 
 	payload = {"url": _webhook_url(), "events": WEBHOOK_EVENTS}
-	secret = (frappe.get_single("OpenWA Gateway Settings").get_password("webhook_secret") or "").strip()
+
+	# Always this session's own secret — there is no shared one to fall back to.
+	secret = ""
+	if session_name:
+		try:
+			secret = ensure_session_webhook_secret(session_name) or ""
+		except Exception:
+			frappe.log_error(
+				title=f"OpenWA: could not prepare webhook secret for {session_name}",
+				message=frappe.get_traceback(),
+			)
 	if secret:
 		payload["secret"] = secret
 
 	resp = client.post(f"/api/sessions/{session_id}/webhooks", json=payload)
 	if resp.status_code not in (200, 201, 409):
-		# Non-fatal: QR linking and outbound sending still work, and the 5-minute
-		# health poll keeps statuses fresh — but inbound messages need this.
+		detail = f"HTTP {resp.status_code}: {resp.text[:300]}"
 		frappe.log_error(
 			title=f"OpenWA webhook registration failed for {session_id}",
-			message=f"HTTP {resp.status_code}: {resp.text[:500]}",
+			message=detail,
 		)
+
+		# Say so on the session. Outbound sending still works, so provisioning
+		# looks successful — but without a webhook nothing reports back, so a
+		# scanned QR never turns into Connected and the session appears to hang.
+		# Leaving that in the Error Log only is how it goes unnoticed.
+		if session_name:
+			hint = ""
+			if resp.status_code == 400 and "not allowed" in (resp.text or "").lower():
+				hint = (
+					" The gateway refused this callback address. Set Webhook Callback URL "
+					"in OpenWA Gateway Settings to a URL it can reach — a local site needs "
+					"a public tunnel."
+				)
+			frappe.db.set_value(
+				"OpenWA Session",
+				session_name,
+				{
+					"last_error": f"Webhook not registered — {detail}.{hint}",
+					"requires_human_attention": 1,
+				},
+				update_modified=False,
+			)
 
 
 def _start_session(client, session_id: str) -> None:
@@ -282,5 +369,73 @@ def deprovision_session(session_name: str) -> dict:
 
 
 def _webhook_url() -> str:
+	"""The address the gateway will POST events to.
+
+	Defaults to this site's own URL, which is right whenever the gateway can
+	reach it. It cannot when the site is local and the gateway is remote: the
+	gateway runs the callback through an SSRF guard and answers
+	400 "Destination address is not allowed" for localhost or a private
+	network, so no webhook is registered and nothing ever reports back.
+
+	Webhook Callback URL overrides it, so a local site can point the gateway at
+	a public tunnel and be tested against the real thing.
+	"""
+	configured = (
+		frappe.db.get_single_value("OpenWA Gateway Settings", "webhook_callback_url") or ""
+	).strip()
+	if configured:
+		# Given whole, use it whole; given as a host, append the endpoint.
+		if "/api/method/" in configured:
+			return configured
+		return configured.rstrip("/") + "/api/method/frappe_whatsapp_openwa.api.webhook.receive"
+
 	base = frappe.utils.get_url()
 	return f"{base}/api/method/frappe_whatsapp_openwa.api.webhook.receive"
+
+
+def release_gateway_session(session_name: str, gateway_session_id: str) -> None:
+	"""Delete a session on the gateway when its Frappe document goes away.
+
+	Without this the gateway keeps the session running forever: deleting the
+	document here removed the only reference to it, so nothing could reconnect
+	it, reuse it, or clean it up. Each create-and-delete cycle stranded another
+	live session on the dashboard.
+
+	Best effort by design — a document delete must not fail because the gateway
+	is unreachable. What cannot be deleted now is reported, and stays visible on
+	the gateway for an operator to remove.
+	"""
+	if not gateway_session_id:
+		return
+
+	# Tests and fixture teardown delete sessions constantly and have no gateway
+	# to talk to; the same flag that skips provisioning skips the release.
+	if frappe.flags.get("openwa_skip_provision"):
+		return
+
+	# Nothing to release against an unconfigured gateway, and reporting that as
+	# a failure on every delete would be noise rather than signal.
+	try:
+		settings = frappe.get_single("OpenWA Gateway Settings")
+		if not (settings.gateway_base_url or "").strip():
+			return
+	except Exception:
+		return
+
+	from frappe_whatsapp_openwa.utils.gateway import get_gateway_client
+
+	try:
+		client = get_gateway_client(timeout=10.0)
+		resp = client.delete(f"/api/sessions/{gateway_session_id}")
+		if resp.status_code not in (200, 202, 204, 404):
+			frappe.log_error(
+				title=f"OpenWA: could not release gateway session {gateway_session_id}",
+				message=(f"Session {session_name} was deleted in Frappe but the gateway "
+				         f"answered HTTP {resp.status_code}. The session is still running "
+				         f"there and needs removing by hand."),
+			)
+	except Exception:
+		frappe.log_error(
+			title=f"OpenWA: could not release gateway session {gateway_session_id}",
+			message=frappe.get_traceback(),
+		)

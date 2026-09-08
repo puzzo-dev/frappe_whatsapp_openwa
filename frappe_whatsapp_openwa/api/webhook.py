@@ -3,12 +3,12 @@ import hmac
 
 import frappe
 
+from frappe_whatsapp_openwa.utils.idempotency import claim_event, release_event
+from frappe_whatsapp_openwa.utils.settings import limit, session_limit
+
 # Rate limit: max requests per window per gateway session_id (identified after HMAC).
-_RATE_LIMIT_WINDOW = 60   # seconds
-_RATE_LIMIT_MAX = 200     # events per window per session
 
 # Maximum media file size re-hosted from the gateway into Frappe File storage.
-_MAX_MEDIA_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 @frappe.whitelist(allow_guest=True)
@@ -31,6 +31,23 @@ def receive():
 
 	_check_rate_limit(session_id)
 
+	# Replay and re-delivery, handled with what the gateway actually sends.
+	#
+	# Earlier this app assumed neither a nonce nor a timestamp existed and fell
+	# back to hashing the signature over a short window. Both do exist: every
+	# delivery carries X-OpenWA-Idempotency-Key, content-derived and stable
+	# across retries but different per occurrence, and the signed body carries
+	# an ISO-8601 `timestamp`. Together they close what the signature alone
+	# could not — the key collapses retries of one occurrence, and the freshness
+	# window expires a captured request instead of leaving it valid forever.
+	if _is_stale(payload.get("timestamp")):
+		# 200: the gateway must not retry something we will reject again.
+		return {"status": "ignored", "reason": "stale delivery"}
+
+	idempotency_key = (frappe.request.headers.get("X-OpenWA-Idempotency-Key") or "").strip()
+	if idempotency_key and not claim_event("delivery", idempotency_key):
+		return {"status": "ignored", "reason": "duplicate delivery"}
+
 	log = frappe.get_doc({
 		"doctype": "OpenWA Webhook Log",
 		"received_at": frappe.utils.now(),
@@ -48,6 +65,13 @@ def receive():
 			_handle_ack(payload, log)
 		elif event in ("ping", "test"):
 			return {"status": "ok", "message": "pong"}
+		else:
+			# Not an error: the gateway emits more events than this app
+			# subscribes to, and a new one must not look like a failure. Recorded
+			# so an unhandled event is visible rather than silently successful.
+			log.error_message = f"No handler for event {event}"
+			log.save(ignore_permissions=True)
+			return {"status": "ignored", "reason": "unhandled event"}
 	except Exception:
 		frappe.log_error(
 			title=f"OpenWA webhook handler error [{event}]",
@@ -56,29 +80,97 @@ def receive():
 		log.error_message = frappe.get_traceback()[:1000]
 		log.save(ignore_permissions=True)
 
+		# The claim was taken before the work, so it has to go back now. The
+		# gateway retries with the *same* idempotency key, and a claim left
+		# behind would dismiss that retry as a duplicate — turning a recoverable
+		# error into a permanently lost event.
+		release_event("delivery", idempotency_key)
+
+		# Answer with a failure so the gateway retries at all.
+		#
+		# This used to return 200 whatever happened, which told the gateway the
+		# delivery had been accepted and stopped it trying again, so a transient
+		# database error lost the event outright. A non-2xx is retried
+		# (retryCount, default 3) and stranded deliveries are replayed by the
+		# gateway's own sweep.
+		#
+		# Committing first keeps the log row and its traceback, which the raise
+		# would otherwise roll back with everything else. A handler that failed
+		# part-way therefore leaves that part committed and the retry re-runs it;
+		# the handlers are written to tolerate that, and losing the record of
+		# why a delivery failed is the worse trade.
+		frappe.db.commit()
+		raise frappe.ValidationError(f"Handler failed for {event}")
+
 	return {"status": "ok"}
 
 
+def _session_secret(session_id: str) -> str:
+	"""The secret this session's webhook is signed with, or "" if it has none.
+
+	Only the session's own secret is accepted. A single shared secret used to be
+	tried as well, left over from before secrets were per-session — but the
+	upgrade patch gives every existing session its own and re-registers it, and
+	provisioning mints one for any session that lacks it, so the shared key
+	guarded nothing and would have exposed every session at once if leaked.
+
+	The body names the session, which is only a claim; it selects which key to
+	try, and the signature then has to verify against that key, so a forged
+	sessionId cannot get past it.
+	"""
+	if not session_id:
+		return ""
+	try:
+		from frappe.utils.password import get_decrypted_password
+
+		name = frappe.db.get_value("OpenWA Session", {"gateway_session_id": session_id}, "name")
+		if not name:
+			return ""
+		return (get_decrypted_password(
+			"OpenWA Session", name, "webhook_secret", raise_exception=False
+		) or "").strip()
+	except Exception:
+		return ""
+
+
 def _parse_and_verify(settings) -> dict:
-	secret = (settings.get_password("webhook_secret") or "").strip()
+	"""Authenticate the delivery and return its parsed body.
+
+	Fails closed: with no secret configured anywhere, nothing is accepted.
+	"""
+	body = frappe.request.get_data()
+
+	# The session id is read before verification only to choose which key to try.
+	# Nothing is trusted until a signature validates against one of them.
+	try:
+		claimed_session = (frappe.parse_json(body) or {}).get("sessionId", "")
+	except Exception:
+		claimed_session = ""
+
+	secret = _session_secret(claimed_session)
 	if not secret:
+		# Fails closed. A session with no secret cannot have its deliveries
+		# verified, and re-provisioning it is what fixes that.
 		frappe.throw(
-			"Webhook secret is not configured. Set it in OpenWA Gateway Settings.",
+			f"No webhook secret for session {claimed_session or '(unknown)'}. "
+			"Re-provision the session so the gateway signs its deliveries.",
 			frappe.AuthenticationError,
 		)
-	body = frappe.request.get_data()
+
 	# Gateway sends: X-OpenWA-Signature: sha256=<hex>
 	signature = (frappe.request.headers.get("X-OpenWA-Signature") or "").strip()
 	if signature.startswith("sha256="):
 		signature = signature[len("sha256="):]
+
 	expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 	if not hmac.compare_digest(signature, expected):
 		frappe.throw("Invalid webhook signature", frappe.AuthenticationError)
+
 	return frappe.parse_json(body)
 
 
 def _check_rate_limit(session_id: str) -> None:
-	"""Reject bursts above _RATE_LIMIT_MAX events per _RATE_LIMIT_WINDOW seconds per session.
+	"""Reject bursts above the configured events-per-window, per session.
 
 	Uses a Redis pipeline so the INCR and the conditional EXPIRE are issued
 	back-to-back without a TOCTOU gap between them.
@@ -86,6 +178,14 @@ def _check_rate_limit(session_id: str) -> None:
 	if not session_id:
 		return
 	# make_key prefixes the site's db_name so the counter is tenant-scoped.
+	# Read from the session this delivery belongs to. A busy number and a quiet
+	# one should not have to share one figure — a single gateway-wide budget
+	# would have to be set for the busiest and would leave the others unguarded.
+	# The lookup is on an indexed column; an unknown id falls back to the
+	# shipped default rather than refusing traffic.
+	session_doc = frappe.db.get_value("OpenWA Session", {"gateway_session_id": session_id}, "name")
+	window = session_limit(session_doc, "webhook_rate_limit_window_seconds", 60)
+	maximum = session_limit(session_doc, "webhook_rate_limit_max", 200)
 	key = frappe.cache.make_key(f"openwa:webhook:ratelimit:{session_id}")
 	pipe = frappe.cache.pipeline()
 	pipe.incr(key)
@@ -93,34 +193,17 @@ def _check_rate_limit(session_id: str) -> None:
 	count, ttl = pipe.execute()
 	if ttl < 0:
 		# Key exists but has no expiry (first call or expiry lost) — set it now.
-		frappe.cache.expire(key, _RATE_LIMIT_WINDOW)
-	if count > _RATE_LIMIT_MAX:
+		frappe.cache.expire(key, window)
+	if count > maximum:
 		frappe.throw(
 			f"Rate limit exceeded for session {session_id}",
 			frappe.TooManyRequestsError,
 		)
 
 
-# Session events carry no gateway event id and no timestamp, so a burst of
-# identical requests cannot be told apart by content. The request signature is
-# the only per-request identifier available, and it is stable for a given body,
-# which makes it a usable replay token. The window is deliberately short: a
-# genuine repeat of a byte-identical session event is a no-op for the state
-# machine, but suppressing one for 24 h would hide real session flapping.
-_SESSION_REPLAY_WINDOW = 60
-
-
-def _session_replay_token() -> str:
-	"""The signature of the current request — identical bodies replay identically."""
-	try:
-		return (frappe.request.headers.get("X-OpenWA-Signature") or "").strip()
-	except Exception:
-		return ""
-
-
 def _handle_session(payload: dict, log) -> None:
 	from frappe_whatsapp_openwa.monitoring.state import handle_session_event
-	from frappe_whatsapp_openwa.utils.idempotency import claim_event
+	from frappe_whatsapp_openwa.utils.idempotency import claim_event, release_event
 
 	# Defence in depth only. This bounds a replay burst; it cannot stop a
 	# patient attacker replaying one captured request every window, because the
@@ -128,12 +211,6 @@ def _handle_session(payload: dict, log) -> None:
 	# damage from that is contained in monitoring/self_healer.py, which
 	# re-checks session state against the gateway before restarting. Closing
 	# the hole properly needs the gateway to sign a timestamp or nonce.
-	if not claim_event("session", _session_replay_token(), ttl=_SESSION_REPLAY_WINDOW):
-		log.processed = 1
-		log.error_message = "Duplicate session event ignored (replay window)"
-		log.save(ignore_permissions=True)
-		return
-
 	handle_session_event(payload)
 	log.processed = 1
 	log.save(ignore_permissions=True)
@@ -141,7 +218,7 @@ def _handle_session(payload: dict, log) -> None:
 
 def _handle_inbound_message(payload: dict, log, settings) -> None:
 	from frappe_whatsapp_openwa.translators.webhook_normalizer import normalize_message_event
-	from frappe_whatsapp_openwa.utils.idempotency import claim_event
+	from frappe_whatsapp_openwa.utils.idempotency import claim_event, release_event
 
 	normalized = normalize_message_event(payload)
 	if normalized is None:
@@ -185,7 +262,7 @@ def _handle_inbound_message(payload: dict, log, settings) -> None:
 
 	if normalized.get("attach"):
 		# The download used to run inline, so the gateway waited on network and
-		# disk — up to _MAX_MEDIA_BYTES — before it got its 200, and a gateway
+		# disk — up to max_media_bytes — before it got its 200, and a gateway
 		# that times out retries, turning one slow message into several.
 		#
 		# It also has to happen after the insert, not before: the File is
@@ -275,14 +352,16 @@ def _rehost_media(media_url: str, message_name: str, settings) -> str | None:
 
 		# Stream the download so we can abort before exhausting memory/disk if
 		# the gateway sends an oversized payload.
+		max_media_bytes = limit("max_media_size_mb", 50) * 1024 * 1024
+
 		with client.stream("GET", media_url) as resp:
 			resp.raise_for_status()
 
 			declared_length = resp.headers.get("content-length")
-			if declared_length and int(declared_length) > _MAX_MEDIA_BYTES:
+			if declared_length and int(declared_length) > max_media_bytes:
 				frappe.log_error(
 					title=f"OpenWA media re-host skipped: file too large for {message_name}",
-					message=f"Content-Length: {declared_length} bytes (limit {_MAX_MEDIA_BYTES})",
+					message=f"Content-Length: {declared_length} bytes (limit {max_media_bytes})",
 				)
 				return None
 
@@ -290,10 +369,10 @@ def _rehost_media(media_url: str, message_name: str, settings) -> str | None:
 			downloaded = 0
 			for chunk in resp.iter_bytes(chunk_size=65_536):
 				downloaded += len(chunk)
-				if downloaded > _MAX_MEDIA_BYTES:
+				if downloaded > max_media_bytes:
 					frappe.log_error(
 						title=f"OpenWA media re-host aborted: body exceeded limit for {message_name}",
-						message=f"Downloaded {downloaded} bytes before abort (limit {_MAX_MEDIA_BYTES})",
+						message=f"Downloaded {downloaded} bytes before abort (limit {max_media_bytes})",
 					)
 					return None
 				chunks.append(chunk)
@@ -435,3 +514,34 @@ def rehost_media_job(message_name: str, media_url: str) -> None:
 		frappe.db.set_value(
 			"WhatsApp Message", message_name, "attach", hosted_url, update_modified=False
 		)
+
+
+def _is_stale(timestamp) -> bool:
+	"""True if a delivery is older than the freshness window.
+
+	The gateway stamps every delivery with its ISO-8601 dispatch time inside the
+	signed body, so an attacker cannot alter it without breaking the signature.
+	That is what makes a captured request expire rather than stay valid forever.
+
+	The window has to tolerate honest lateness — the gateway retries failed
+	deliveries and a reconcile sweep replays stranded ones — so it is generous
+	by default and configurable. A delivery with no timestamp is not treated as
+	stale, because refusing it would drop traffic from an older gateway.
+	"""
+	if not timestamp:
+		return False
+
+	window = limit("webhook_freshness_seconds", 900)
+	try:
+		sent = frappe.utils.get_datetime(timestamp)
+		if sent is None:
+			return False
+		age = (frappe.utils.now_datetime() - sent.replace(tzinfo=None)).total_seconds()
+	except Exception:
+		# An unparseable timestamp is a gateway change, not an attack; let the
+		# signature and the idempotency key carry the delivery.
+		return False
+
+	# Only lateness counts. Clock skew the other way would otherwise reject
+	# perfectly good deliveries from a gateway running slightly ahead.
+	return age > window

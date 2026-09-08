@@ -29,6 +29,7 @@ def route_send_text(
 	meta_fallback_fn: Callable[[], SendResult] | None = None,
 	session_strategy: str | None = None,
 	adapter_retries: bool = True,
+	session_override: str | None = None,
 ) -> SendResult:
 	"""Route a text message.
 
@@ -42,8 +43,17 @@ def route_send_text(
 	  network blip into many gateway calls, and a timeout is not proof of
 	  non-delivery. Passed explicitly rather than through frappe.flags so it
 	  cannot leak between jobs sharing a worker process.
+
+	session_override — a session the caller has already resolved. The doctype
+	  override resolves before sending so it can claim that session's cap slot;
+	  resolving a second time here could pick a different session under a
+	  spreading routing mode, and the message would then go out on a session
+	  whose slot nobody claimed while the claimed one leaked a slot.
 	"""
-	provider, session_name = resolve_provider(account_name, requested_provider, session_strategy)
+	if session_override:
+		provider, session_name = "openwa", session_override
+	else:
+		provider, session_name = resolve_provider(account_name, requested_provider, session_strategy)
 	_meta = meta_fallback_fn or (lambda: MetaAdapter(account_name).send_text(to, body, account_name))
 	if provider == "meta":
 		return _meta()
@@ -65,11 +75,15 @@ def route_send_media(
 	meta_fallback_fn: Callable[[], SendResult] | None = None,
 	session_strategy: str | None = None,
 	adapter_retries: bool = True,
+	session_override: str | None = None,
 ) -> SendResult:
 	_meta = meta_fallback_fn or (
 		lambda: MetaAdapter(account_name).send_media(to, media_url, caption, media_type, account_name)
 	)
-	provider, session_name = resolve_provider(account_name, requested_provider, session_strategy)
+	if session_override:
+		provider, session_name = "openwa", session_override
+	else:
+		provider, session_name = resolve_provider(account_name, requested_provider, session_strategy)
 	if provider == "meta":
 		return _meta()
 	return _try_openwa_then_fallback(

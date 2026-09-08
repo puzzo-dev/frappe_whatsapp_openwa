@@ -43,3 +43,22 @@ def claim_event(event_type: str, event_id: str, ttl: int = _TTL) -> bool:
 	# SET NX EX: returns True if the key was set, None if it already existed.
 	result = frappe.cache.set(key, "1", nx=True, ex=ttl)
 	return result is not None
+
+
+def release_event(event_type: str, event_id: str) -> None:
+	"""Give up a claim so the same event can be processed again.
+
+	Claiming happens before the work, so that concurrent deliveries of one
+	occurrence collapse. If that work then fails, the claim has to go: the
+	gateway retries a failed delivery with the *same* idempotency key, and a
+	claim left behind would dismiss the retry as a duplicate — turning a
+	recoverable error into a silently lost event.
+	"""
+	if not event_id:
+		return
+	key = frappe.cache.make_key(f"{_PREFIX}:{event_type}:{event_id}")
+	try:
+		frappe.cache.delete_value(key)
+	except Exception:
+		# Worst case the claim expires on its own TTL; never break the caller.
+		pass

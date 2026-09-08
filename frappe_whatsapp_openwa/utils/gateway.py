@@ -32,6 +32,9 @@ WEBHOOK_EVENTS = [
 	"session.authenticated",
 	"session.disconnected",
 	"session.status",
+	# handle_session_event has always had a branch for this one; without it in
+	# the subscription the gateway never sent it and the branch was unreachable.
+	"session.reconnect_loop",
 ]
 
 

@@ -12,6 +12,7 @@
   "linked_whatsapp_account",
   "is_default",
   "gateway_session_id",
+  "webhook_secret",
   "column_break_1",
   "status",
   "requires_human_attention",
@@ -23,6 +24,13 @@
   "section_break_3",
   "messages_sent_today",
   "daily_soft_cap",
+  "send_rate_window_seconds",
+  "max_restart_attempts",
+  "pairing_code_max_requests",
+  "pairing_code_window_seconds",
+  "webhook_rate_limit_max",
+  "webhook_rate_limit_window_seconds",
+  "send_rate_max",
   "last_message_sent",
   "column_break_4",
   "disconnect_grace_until",
@@ -49,7 +57,9 @@
    "fieldname": "phone_number",
    "fieldtype": "Data",
    "label": "Phone Number (E.164)",
-   "reqd": 1
+   "reqd": 1,
+   "unique": 1,
+   "description": "The WhatsApp number this session drives. One number, one session — stored in E.164 form so the same number cannot be added again in a different format."
   },
   {
    "fieldname": "linked_whatsapp_account",
@@ -72,6 +82,13 @@
    "label": "Gateway Session ID",
    "read_only": 1,
    "search_index": 1
+  },
+  {
+   "fieldname": "webhook_secret",
+   "fieldtype": "Password",
+   "label": "Webhook Secret",
+   "read_only": 1,
+   "description": "Signs this session's webhook deliveries. Generated on provisioning and registered with the gateway, so a leaked secret exposes only this session and can be rotated without touching the others."
   },
   {
    "fieldname": "column_break_1",
@@ -135,13 +152,61 @@
    "fieldname": "messages_sent_today",
    "fieldtype": "Int",
    "label": "Messages Sent Today",
-   "read_only": 1
+   "read_only": 1,
+   "description": "Counts toward this session's cap and the gateway-wide limit. Resets at midnight."
   },
   {
    "default": "1000",
    "fieldname": "daily_soft_cap",
    "fieldtype": "Int",
-   "label": "Daily Soft Cap"
+   "label": "Daily Soft Cap",
+   "description": "Most messages this number may send in a day. 0 means no cap for this session. The gateway-wide Daily Send Limit in OpenWA Gateway Settings applies as well — whichever is reached first stops the send."
+  },
+  {
+   "fieldname": "send_rate_window_seconds",
+   "fieldtype": "Int",
+   "label": "Send Rate Window (seconds)",
+   "default": "60"
+  },
+  {
+   "fieldname": "max_restart_attempts",
+   "fieldtype": "Int",
+   "label": "Max Auto-Restart Attempts",
+   "default": "3",
+   "description": "After this many failed restarts the self-healer marks this session Failed and asks for a human."
+  },
+  {
+   "fieldname": "pairing_code_max_requests",
+   "fieldtype": "Int",
+   "label": "Max Pairing Code Requests",
+   "default": "5",
+   "description": "Per window. WhatsApp throttles device linking and can block a number that asks too often."
+  },
+  {
+   "fieldname": "pairing_code_window_seconds",
+   "fieldtype": "Int",
+   "label": "Pairing Code Window (seconds)",
+   "default": "600"
+  },
+  {
+   "fieldname": "webhook_rate_limit_max",
+   "fieldtype": "Int",
+   "label": "Max Webhook Events per Window",
+   "default": "200",
+   "description": "Inbound events accepted for this session before bursts are rejected."
+  },
+  {
+   "fieldname": "webhook_rate_limit_window_seconds",
+   "fieldtype": "Int",
+   "label": "Webhook Rate Limit Window (seconds)",
+   "default": "60"
+  },
+  {
+   "fieldname": "send_rate_max",
+   "fieldtype": "Int",
+   "label": "Max Sends per Window",
+   "default": "20",
+   "description": "How fast this number may send. Separate from Daily Soft Cap: that bounds the day's total, this bounds the pace — a campaign that respects 1000/day by firing them in two minutes is what gets a number blocked."
   },
   {
    "fieldname": "last_message_sent",

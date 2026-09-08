@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import frappe
 
+from frappe_whatsapp_openwa.utils.settings import limit
+
 from frappe_whatsapp_openwa.utils.session_cap import cap_reached, release_slot, reserve_slot
 
-_STUCK_SENDING_MINUTES = 5
-_BATCH_SIZE = 50
 
 # Backoff delays per attempt number (in minutes). Capped at index -1 for attempts > len.
 _BACKOFF_MINUTES = [0, 1, 3, 10, 30, 60]
@@ -30,7 +30,7 @@ def _run_queue():
 	now = frappe.utils.now_datetime()
 
 	# ── Reaper: recover rows stuck in Sending for > N min ────────────────
-	stale_cutoff = frappe.utils.add_to_date(now, minutes=-_STUCK_SENDING_MINUTES)
+	stale_cutoff = frappe.utils.add_to_date(now, minutes=-limit("stuck_sending_minutes", 5))
 	# A row that already recorded a provider message id was delivered; only its
 	# status write was lost. Re-queueing it would send the message a second
 	# time, so it is excluded and left for an operator to inspect.
@@ -39,7 +39,7 @@ def _run_queue():
 	# between the gateway call and the status write leaves no message id, and
 	# nothing in the row can distinguish that from a send that never left. The
 	# gateway offers no idempotency key to make the retry safe, so this stays
-	# at-least-once by construction — _STUCK_SENDING_MINUTES is set well beyond
+	# at-least-once by construction — the stuck-sending timeout is set well beyond
 	# any single request timeout so only a dead worker trips it.
 	frappe.db.sql(
 		"""UPDATE `tabWhatsApp Outbound Queue`
@@ -60,7 +60,7 @@ def _run_queue():
 		   AND (next_attempt_at IS NULL OR next_attempt_at <= %s)
 		   ORDER BY enqueued_at ASC
 		   LIMIT %s""",
-		[frappe.utils.now(), _BATCH_SIZE],
+		[frappe.utils.now(), limit("queue_batch_size", 50)],
 		as_dict=True,
 	)
 	if not queued:
@@ -99,8 +99,23 @@ def _process_row(row, now):
 				"WhatsApp Templates", tpl, "custom_session_strategy"
 			) or None
 
+	# A queued campaign message keeps the campaign's routing: it was only
+	# queued because a session was unhealthy, and draining it from a number the
+	# campaign deliberately excluded would quietly break the choice the sender
+	# made. The campaign name travels in the payload because the queue row is
+	# not linked to the WhatsApp Message it stands in for.
+	from frappe_whatsapp_openwa.routing.campaign import campaign_routing
+
+	mode_override, session_pool = campaign_routing((payload or {}).get("campaign"))
+
 	try:
-		provider, session_name = resolve_provider(row.account, row.requested_provider, session_strategy)
+		provider, session_name = resolve_provider(
+			row.account,
+			row.requested_provider,
+			session_strategy,
+			mode_override=mode_override,
+			session_pool=session_pool,
+		)
 	except Exception:
 		provider, session_name = "meta", None
 
@@ -152,7 +167,7 @@ def _process_row(row, now):
 		reserved = True
 
 	try:
-		result = _dispatch(row, payload, session_strategy)
+		result = _dispatch(row, payload, session_strategy, session_name if provider == "openwa" else None)
 		if result.success:
 			frappe.db.set_value("WhatsApp Outbound Queue", row.name, {
 				"status": "Sent",
@@ -225,7 +240,19 @@ def _create_dead_letter(queue_name: str, error: str) -> None:
 		)
 
 
-def _dispatch(row, payload: dict, session_strategy: str | None = None):
+def _dispatch(
+	row,
+	payload: dict,
+	session_strategy: str | None = None,
+	session_override: str | None = None,
+):
+	"""Send one queued row.
+
+	session_override is the session the caller already resolved and reserved a
+	cap slot on. Without it the router resolves again, and under a spreading
+	routing mode it can land on a different session — sending from one session
+	while the slot is held (and later released) on another.
+	"""
 	from frappe_whatsapp_openwa.routing.router import route_send_media, route_send_text
 
 	msg_type = row.message_type or "text"
@@ -238,6 +265,7 @@ def _dispatch(row, payload: dict, session_strategy: str | None = None):
 			session_strategy=session_strategy,
 			# This function is already the retry loop — see route_send_text.
 			adapter_retries=False,
+			session_override=session_override,
 		)
 	elif msg_type in ("image", "document", "video", "audio"):
 		# _enqueue_for_later stores the media URL under "attach" and the caption
@@ -254,6 +282,7 @@ def _dispatch(row, payload: dict, session_strategy: str | None = None):
 			requested_provider=row.requested_provider,
 			session_strategy=session_strategy,
 			adapter_retries=False,
+			session_override=session_override,
 		)
 	elif msg_type == "template":
 		# _enqueue_for_later queues templates as "template", which had no branch
@@ -261,7 +290,7 @@ def _dispatch(row, payload: dict, session_strategy: str | None = None):
 		# retried six times and died as "Unsupported message_type 'template'".
 		# The template is flattened the same way the direct send path flattens
 		# it, so a queued template and an immediate one produce the same text.
-		return _dispatch_template(row, payload, session_strategy)
+		return _dispatch_template(row, payload, session_strategy, session_override)
 	else:
 		from frappe_whatsapp_openwa.providers.base import SendResult
 		return SendResult(
@@ -270,7 +299,12 @@ def _dispatch(row, payload: dict, session_strategy: str | None = None):
 		)
 
 
-def _dispatch_template(row, payload: dict, session_strategy: str | None = None):
+def _dispatch_template(
+	row,
+	payload: dict,
+	session_strategy: str | None = None,
+	session_override: str | None = None,
+):
 	"""Flatten a queued template and send it as text via the router."""
 	from frappe_whatsapp_openwa.providers.base import SendResult
 	from frappe_whatsapp_openwa.routing.router import route_send_text
@@ -312,4 +346,5 @@ def _dispatch_template(row, payload: dict, session_strategy: str | None = None):
 		requested_provider=row.requested_provider,
 		session_strategy=session_strategy,
 		adapter_retries=False,
+		session_override=session_override,
 	)

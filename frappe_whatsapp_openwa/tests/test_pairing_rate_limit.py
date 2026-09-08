@@ -20,7 +20,10 @@ class TestPairingCodeRateLimit(unittest.TestCase):
 		pipe = frappe_mock.cache.pipeline.return_value
 		pipe.execute.return_value = (count, ttl)
 
-		with patch(f"{_MODULE}.frappe", frappe_mock):
+		# The budget lives in OpenWA Gateway Settings now, so the test states it
+		# rather than inheriting whatever a mocked settings read happens to return.
+		with patch(f"{_MODULE}.frappe", frappe_mock), \
+			patch(f"{_MODULE}.session_limit", side_effect=lambda name, f, d, **k: {"pairing_code_max_requests": 5, "pairing_code_window_seconds": 600}[f]):
 			from frappe_whatsapp_openwa.api.session import _check_pairing_code_rate_limit
 			_check_pairing_code_rate_limit("OWA-SESS-001")
 		return frappe_mock
@@ -39,7 +42,8 @@ class TestPairingCodeRateLimit(unittest.TestCase):
 		frappe_mock.throw = MagicMock(side_effect=exc)
 		frappe_mock.cache.make_key = lambda k, **kw: k
 		frappe_mock.cache.pipeline.return_value.execute.return_value = (6, 60)
-		with patch(f"{_MODULE}.frappe", frappe_mock):
+		with patch(f"{_MODULE}.frappe", frappe_mock), \
+			patch(f"{_MODULE}.session_limit", side_effect=lambda name, f, d, **k: {"pairing_code_max_requests": 5, "pairing_code_window_seconds": 600}[f]):
 			from frappe_whatsapp_openwa.api.session import _check_pairing_code_rate_limit
 			with self.assertRaises(exc):
 				_check_pairing_code_rate_limit("OWA-SESS-001")

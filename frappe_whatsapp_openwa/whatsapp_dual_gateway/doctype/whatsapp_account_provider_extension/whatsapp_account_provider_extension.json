@@ -39,7 +39,8 @@
    "fieldname": "routing_mode_override",
    "fieldtype": "Select",
    "label": "Routing Mode Override",
-   "options": "inherit\nAccount-level\nMessage-level\nHybrid"
+   "options": "inherit\nAccount-level\nMessage-level\nHybrid",
+   "description": "Which session carries this account's messages. Account-level: one session. Message-level: spread across sessions, and a caller may route a single message the other way if the permission below is on. Hybrid: default session while it can send, spilling when it cannot. Leave blank to follow the gateway default."
   },
   {
    "fieldname": "openwa_session",

@@ -24,14 +24,23 @@ frappe.ui.form.on("OpenWA Session", {
 });
 
 
+// Frappe's set_intro appends: form/layout.js does `$html.appendTo(this.message)`
+// rather than replacing, so calling it again stacks another banner. _render_qr
+// runs on every form refresh and every QR rotation, which is why the scan
+// instructions piled up down the screen. Only speak when the message changes.
+function _set_intro(frm, text, color) {
+	if (frm._openwa_intro === text) return;
+	frm._openwa_intro = text;
+	frm.set_intro("");
+	if (text) frm.set_intro(text, color);
+}
+
+
 function _render_qr(frm) {
 	const wrapper = frm.fields_dict.qr_code_data && frm.fields_dict.qr_code_data.wrapper;
 
 	if (frm.doc.status === "QR Required" && frm.doc.qr_code_data) {
-		frm.set_intro(
-			__("Scan the QR code with the WhatsApp phone: WhatsApp → Linked Devices → Link a Device. The code refreshes automatically."),
-			"orange"
-		);
+		_set_intro(frm, __("Scan the QR code with the WhatsApp phone: WhatsApp → Linked Devices → Link a Device. The code refreshes automatically."), "orange");
 		if (wrapper) {
 			const raw = String(frm.doc.qr_code_data || "");
 			// Gateway-supplied. Accept only a base64 payload or a data:image
@@ -41,7 +50,7 @@ function _render_qr(frm) {
 			const is_bare_base64 = /^[A-Za-z0-9+/=\s]+$/.test(raw);
 			if (!is_data_image && !is_bare_base64) {
 				$(wrapper).empty();
-				frm.set_intro(__("The gateway returned an unreadable QR code."), "red");
+				_set_intro(frm, __("The gateway returned an unreadable QR code."), "red");
 				return;
 			}
 			const src = is_data_image ? raw : `data:image/png;base64,${raw}`;
@@ -55,17 +64,17 @@ function _render_qr(frm) {
 	} else {
 		if (wrapper) $(wrapper).empty();
 		if (frm.doc.status === "QR Required") {
-			frm.set_intro(__("Waiting for QR code from gateway…"), "blue");
+			_set_intro(frm, __("Waiting for QR code from gateway…"), "blue");
 			_start_qr_poll(frm);
 		} else if (!frm.is_new() && frm.doc.status === "Initializing") {
 			const msg = frm.doc.gateway_session_id
 				? __("Waiting for the gateway engine to start… the QR code will appear here shortly.")
 				: __("Provisioning this session on the gateway… the QR code will appear here shortly.");
-			frm.set_intro(msg, "blue");
+			_set_intro(frm, msg, "blue");
 			_start_qr_poll(frm);
 		} else {
 			_stop_qr_poll(frm);
-			frm.set_intro("");
+			_set_intro(frm, "");
 		}
 	}
 }

@@ -7,18 +7,33 @@
  "field_order": [
   "gateway_base_url",
   "gateway_api_key",
+  "webhook_callback_url",
   "column_break_1",
   "enable_openwa_provider",
   "default_routing_mode",
   "section_break_2",
   "auto_fallback_enabled",
-  "fallback_alert_email",
+  "fallback_alert_help",
   "column_break_3",
-  "webhook_secret",
+  "daily_send_limit",
+  "gateway_send_rate_max",
   "session_health_ttl_seconds",
   "section_break_4",
   "meta_rate_limit_max_calls",
-  "meta_rate_limit_window_seconds"
+  "meta_rate_limit_window_seconds",
+  "sec_limits",
+  "max_media_size_mb",
+  "webhook_freshness_seconds",
+  "col_limits",
+  "provision_rate_limit_max",
+  "provision_rate_limit_window_seconds",
+  "queue_batch_size",
+  "stuck_sending_minutes",
+  "sec_retention",
+  "webhook_log_retention_days",
+  "queue_retention_days",
+  "col_retention",
+  "fallback_log_retention_days"
  ],
  "fields": [
   {
@@ -32,6 +47,12 @@
    "fieldtype": "Password",
    "label": "Gateway API Key",
    "reqd": 1
+  },
+  {
+   "fieldname": "webhook_callback_url",
+   "fieldtype": "Data",
+   "label": "Webhook Callback URL",
+   "description": "Where the gateway should send events. Leave blank to use this site's own URL. Set it when the gateway cannot reach that address — a remote gateway refuses to register a callback pointing at localhost or a private network (\"Destination address is not allowed\"), so a local site needs a public tunnel here, e.g. https://your-tunnel.example/api/method/frappe_whatsapp_openwa.api.webhook.receive"
   },
   {
    "fieldname": "column_break_1",
@@ -48,7 +69,9 @@
    "fieldtype": "Select",
    "label": "Default Routing Mode",
    "options": "Account-level\nMessage-level\nHybrid",
-   "reqd": 1
+   "reqd": 1,
+   "default": "Account-level",
+   "description": "Which of an account's OpenWA sessions carries a message, for accounts that have not chosen. Account-level: one session carries everything. Message-level: spread across sessions so no single number carries a campaign. Hybrid: the default session while it can send, spilling to another when it hits its rate or cap. Meta is not a routing option — it is the fallback when no session can send, and that is reported."
   },
   {
    "fieldname": "section_break_2",
@@ -62,19 +85,27 @@
    "label": "Auto Fallback Enabled"
   },
   {
-   "fieldname": "fallback_alert_email",
-   "fieldtype": "Data",
-   "label": "Fallback Alert Email",
-   "options": "Email"
+   "fieldname": "fallback_alert_help",
+   "fieldtype": "HTML",
+   "options": "<div class='text-muted small'><b>Want to be told when a fallback happens?</b><br>Every fallback already writes a <b>WhatsApp Fallback Log</b> record. Create a <b>Notification</b> on that doctype with Send Alert On set to <i>New</i>, and choose email, WhatsApp or system notification there. That way the alert honours your own recipients, conditions and channels, and it stops when you disable the Notification.</div>"
   },
   {
    "fieldname": "column_break_3",
    "fieldtype": "Column Break"
   },
   {
-   "fieldname": "webhook_secret",
-   "fieldtype": "Password",
-   "label": "Webhook HMAC Secret"
+   "fieldname": "daily_send_limit",
+   "fieldtype": "Int",
+   "label": "Daily Send Limit",
+   "default": "0",
+   "description": "Ceiling on OpenWA messages per day across every session. 0 means no ceiling. Each session's own Daily Soft Cap still applies as the per-number guard — whichever limit is reached first stops the send. Counters reset at midnight."
+  },
+  {
+   "fieldname": "gateway_send_rate_max",
+   "fieldtype": "Int",
+   "label": "Max Sends per Window (all sessions)",
+   "default": "0",
+   "description": "Ceiling on send rate across every session. 0 means no overall rate ceiling."
   },
   {
    "default": "60",
@@ -98,6 +129,84 @@
    "fieldname": "meta_rate_limit_window_seconds",
    "fieldtype": "Int",
    "label": "Meta Rate Limit Window (seconds)"
+  },
+  {
+   "fieldname": "sec_limits",
+   "fieldtype": "Section Break",
+   "label": "Limits"
+  },
+  {
+   "fieldname": "max_media_size_mb",
+   "fieldtype": "Int",
+   "label": "Max Inbound Media Size (MB)",
+   "default": "50",
+   "description": "Largest media file the webhook will download from the gateway. Anything bigger is logged and skipped."
+  },
+  {
+   "fieldname": "webhook_freshness_seconds",
+   "fieldtype": "Int",
+   "label": "Webhook Freshness Window (seconds)",
+   "default": "900",
+   "description": "Reject deliveries whose signed timestamp is older than this — it is what stops a captured request being replayed later. Must stay comfortably above the gateway's own retry and reconcile delays."
+  },
+  {
+   "fieldname": "col_limits",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "provision_rate_limit_max",
+   "fieldtype": "Int",
+   "label": "Max Provision Requests",
+   "default": "10",
+   "description": "Session provisioning calls allowed per window, per user."
+  },
+  {
+   "fieldname": "provision_rate_limit_window_seconds",
+   "fieldtype": "Int",
+   "label": "Provision Window (seconds)",
+   "default": "3600"
+  },
+  {
+   "fieldname": "queue_batch_size",
+   "fieldtype": "Int",
+   "label": "Queue Batch Size",
+   "default": "50",
+   "description": "Outbound queue rows processed per run."
+  },
+  {
+   "fieldname": "stuck_sending_minutes",
+   "fieldtype": "Int",
+   "label": "Stuck Sending Timeout (minutes)",
+   "default": "5",
+   "description": "A row left Sending longer than this is treated as a dead worker and re-queued. Keep it well above any request timeout."
+  },
+  {
+   "fieldname": "sec_retention",
+   "fieldtype": "Section Break",
+   "label": "Retention"
+  },
+  {
+   "fieldname": "webhook_log_retention_days",
+   "fieldtype": "Int",
+   "label": "Webhook Log Retention (days)",
+   "default": "7"
+  },
+  {
+   "fieldname": "queue_retention_days",
+   "fieldtype": "Int",
+   "label": "Outbound Queue Retention (days)",
+   "default": "30",
+   "description": "Applies to Failed, Expired and Cancelled rows."
+  },
+  {
+   "fieldname": "col_retention",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "fallback_log_retention_days",
+   "fieldtype": "Int",
+   "label": "Fallback Log Retention (days)",
+   "default": "90"
   }
  ],
  "issingle": 1,

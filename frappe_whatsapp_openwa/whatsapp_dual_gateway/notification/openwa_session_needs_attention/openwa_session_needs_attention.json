@@ -1,0 +1,29 @@
+{
+ "attach_print": 0,
+ "channel": "Email",
+ "condition": "doc.requires_human_attention == 1",
+ "creation": "2026-07-16 22:30:56.692724",
+ "days_in_advance": 0,
+ "docstatus": 0,
+ "doctype": "Notification",
+ "document_type": "OpenWA Session",
+ "enabled": 1,
+ "event": "Value Change",
+ "idx": 0,
+ "is_standard": 1,
+ "message": "The OpenWA session <b>{{ doc.session_name }}</b> ({{ doc.phone_number }}) requires human attention.\n\n<b>Current status:</b> {{ doc.status }}\n\n{% if doc.status == 'QR Required' %}Please scan the QR code from the session form.{% elif doc.status == 'Restart Failed' %}Automatic restart has been exhausted ({{ doc.restart_attempt_count }} attempts). Manual intervention required.{% elif doc.status == 'Banned' %}This number has been banned by WhatsApp. A SIM swap is required.{% endif %}\n\n<a href=\"{{ frappe.utils.get_url() }}/app/openwa-session/{{ doc.name }}\">View Session</a>",
+ "modified": "2026-07-16 22:30:56.692724",
+ "modified_by": "Administrator",
+ "module": "WhatsApp Dual Gateway",
+ "name": "openwa-session-needs-attention",
+ "owner": "Administrator",
+ "recipients": [
+  {
+   "receiver_by_role": "System Manager"
+  }
+ ],
+ "send_system_notification": 0,
+ "send_to_all_assignees": 0,
+ "subject": "OpenWA Session Needs Attention: {{ doc.session_name }}",
+ "value_changed": "requires_human_attention"
+}

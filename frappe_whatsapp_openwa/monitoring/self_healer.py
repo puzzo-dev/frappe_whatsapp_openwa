@@ -1,5 +1,7 @@
 import frappe
 
+from frappe_whatsapp_openwa.utils.settings import session_limit
+
 
 def heal_disconnected_sessions():
 	"""Every 5 minutes: attempt restart on Disconnected sessions past their grace window."""
@@ -44,7 +46,6 @@ def _do_heal():
 
 	client = get_gateway_client(timeout=35.0)
 
-	MAX_RESTART_ATTEMPTS = 3
 
 	for s in sessions:
 		# Grace period: don't restart immediately on disconnect
@@ -80,8 +81,11 @@ def _do_heal():
 			)
 			continue
 
+		# Each number gets its own patience: a flaky one can be given more
+		# attempts without loosening every other session.
+		max_restart_attempts = session_limit(s.name, "max_restart_attempts", 3)
 		attempts = s.restart_attempt_count or 0
-		if attempts >= MAX_RESTART_ATTEMPTS:
+		if attempts >= max_restart_attempts:
 			frappe.db.set_value(
 				"OpenWA Session",
 				s.name,

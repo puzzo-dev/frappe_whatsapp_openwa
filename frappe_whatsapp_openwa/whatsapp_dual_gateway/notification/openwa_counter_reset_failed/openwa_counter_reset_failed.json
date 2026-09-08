@@ -1,0 +1,28 @@
+{
+ "attach_print": 0,
+ "channel": "Email",
+ "condition": "",
+ "creation": "2026-07-16 22:30:56.830864",
+ "days_in_advance": 0,
+ "docstatus": 0,
+ "doctype": "Notification",
+ "document_type": "OpenWA Gateway Settings",
+ "enabled": 1,
+ "event": "Custom",
+ "idx": 0,
+ "is_standard": 1,
+ "message": "<p>The scheduled midnight reset of <b>messages_sent_today</b> on all OpenWA Sessions failed.</p><p>Sessions that have already reached their daily soft cap will continue to queue or fall back to Meta until the counters are manually reset.</p><p>Check the <a href=\"{{ frappe.utils.get_url() }}/app/error-log\">Error Log</a> for details.</p><p>To reset manually, run:<br><code>frappe.db.sql(\"UPDATE `tabOpenWA Session` SET messages_sent_today = 0\")</code></p>",
+ "modified": "2026-07-16 22:30:56.830864",
+ "modified_by": "Administrator",
+ "module": "WhatsApp Dual Gateway",
+ "name": "openwa-counter-reset-failed",
+ "owner": "Administrator",
+ "recipients": [
+  {
+   "receiver_by_role": "System Manager"
+  }
+ ],
+ "send_system_notification": 0,
+ "send_to_all_assignees": 0,
+ "subject": "ALERT: OpenWA Daily Counter Reset Failed"
+}

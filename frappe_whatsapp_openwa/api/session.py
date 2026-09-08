@@ -1,5 +1,7 @@
 import frappe
 
+from frappe_whatsapp_openwa.utils.settings import session_limit
+
 from frappe_whatsapp_openwa.utils.gateway import (
 	STATUS_QR_REQUIRED,
 	fetch_qr_image,
@@ -10,22 +12,15 @@ from frappe_whatsapp_openwa.utils.gateway import (
 
 
 @frappe.whitelist()
-def get_qr(session_name):
-	"""Fetch the current QR image from the gateway and persist it on the doc.
-
-	Called by the form poll while status is QR Required — QR codes rotate every
-	~20 seconds, so the image must be refreshed from the gateway, not served
-	from a stale doc field.
-	"""
-	doc = frappe.get_doc("OpenWA Session", session_name)
-	doc.check_permission("read")
-	_sync_from_gateway(doc, want_qr=True)
-	return {"qr_code_data": doc.qr_code_data, "status": doc.status}
-
-
-@frappe.whitelist()
 def get_status(session_name):
-	"""Fetch the live session status from the gateway and persist it."""
+	"""Fetch the live session status from the gateway and persist it.
+
+	This also refreshes the QR image, which rotates every ~20 seconds and so
+	cannot be served from a stale doc field. A separate get_qr endpoint used to
+	do that half of the job; the form poll stopped calling it once status and QR
+	came back together, leaving a whitelisted endpoint nothing called and a
+	docstring claiming it was still the one being polled.
+	"""
 	doc = frappe.get_doc("OpenWA Session", session_name)
 	doc.check_permission("read")
 	_sync_from_gateway(doc, want_qr=True)
@@ -210,9 +205,26 @@ def _sync_from_gateway(doc, want_qr: bool = False) -> None:
 	if changed:
 		doc.last_state_change = now
 	# Sync path — bypass the manual-edit guard.
+	#
+	# Two things write this row: this poll (one request per open form, every few
+	# seconds) and the scheduled health check. When they overlap, save() reloads
+	# the row for its concurrency check and MariaDB answers 1020, "record has
+	# changed since last read" — which surfaced as a 500 on a form that was only
+	# refreshing itself.
+	#
+	# Losing the race is not an error here. The other writer has just stored the
+	# same gateway state this one fetched, so the work is already done; the poll
+	# simply records that it ran and returns. Retrying would race again, and
+	# raising would fail a request the user never made.
 	frappe.flags.openwa_sync = True
 	try:
 		doc.save(ignore_permissions=True)
+	except (frappe.QueryDeadlockError, frappe.TimestampMismatchError):
+		frappe.db.rollback()
+		frappe.db.set_value(
+			"OpenWA Session", doc.name, "last_health_check", now, update_modified=False
+		)
+		return
 	finally:
 		frappe.flags.openwa_sync = False
 
@@ -233,13 +245,13 @@ def _sync_from_gateway(doc, want_qr: bool = False) -> None:
 # requests too many, so the cost of an unbounded loop here is not just gateway
 # load — it is the phone number becoming unlinkable. A human clicking the button
 # needs a handful of attempts; anything past that is a script.
-_PAIRING_CODE_MAX_REQUESTS = 5
-_PAIRING_CODE_WINDOW_SECONDS = 600
 
 
 def _check_pairing_code_rate_limit(session_name: str) -> None:
 	"""Throw once a session exceeds the pairing-code request budget."""
 	# make_key prefixes the site's db_name so the counter is tenant-scoped.
+	maximum = session_limit(session_name, "pairing_code_max_requests", 5)
+	window = session_limit(session_name, "pairing_code_window_seconds", 600)
 	key = frappe.cache.make_key(f"openwa:pairing_code:{session_name}")
 	pipe = frappe.cache.pipeline()
 	pipe.incr(key)
@@ -247,8 +259,8 @@ def _check_pairing_code_rate_limit(session_name: str) -> None:
 	count, ttl = pipe.execute()
 	if ttl < 0:
 		# First call in this window, or the expiry was lost — (re)apply it.
-		frappe.cache.expire(key, _PAIRING_CODE_WINDOW_SECONDS)
-	if count > _PAIRING_CODE_MAX_REQUESTS:
+		frappe.cache.expire(key, window)
+	if count > maximum:
 		frappe.throw(
 			frappe._("Too many pairing code requests for this session. "
 			         "Wait a few minutes before trying again."),

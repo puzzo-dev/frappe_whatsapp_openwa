@@ -11,6 +11,13 @@ override_doctype_class = {
 	"WhatsApp Message": "frappe_whatsapp_openwa.overrides.whatsapp_message.WhatsAppMessageDualGateway",
 	"WhatsApp Notification": "frappe_whatsapp_openwa.overrides.notification.WhatsAppNotificationDualGateway",
 	"WhatsApp Templates": "frappe_whatsapp_openwa.overrides.whatsapp_templates.WhatsAppTemplatesDualGateway",
+	"Bulk WhatsApp Message":
+		"frappe_whatsapp_openwa.overrides.bulk_whatsapp_message.BulkWhatsAppMessageDualGateway",
+}
+
+# ─── Client scripts ──────────────────────────────────────────────────────
+doctype_js = {
+	"Bulk WhatsApp Message": "public/js/bulk_whatsapp_message.js",
 }
 
 # ─── Override any direct frappe.call() API usage of frappe_whatsapp utils ─
@@ -76,5 +83,6 @@ extend_bootinfo = "frappe_whatsapp_openwa.utils.boot.get_bootinfo"
 # ─── Uninstall cleanup ─────────────────────────────────────────────────────
 # Roles have no `module` link, so Frappe's module-based uninstall never removes
 # them. Sweep the app-owned role explicitly to avoid orphan residue.
+after_migrate = "frappe_whatsapp_openwa.install.after_migrate"
 before_uninstall = "frappe_whatsapp_openwa.install.before_uninstall"
 

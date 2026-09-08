@@ -76,7 +76,7 @@
    "fieldname": "failure_reason",
    "fieldtype": "Select",
    "label": "Failure Reason",
-   "options": "\nSession disconnected\nRate limited\nNetwork timeout\nAPI error\nOther"
+   "options": "\nSession disconnected\nRate limited\nNetwork timeout\nAPI error\nOther\nOpenWAUnavailable"
   },
   {
    "fieldname": "failure_detail",
