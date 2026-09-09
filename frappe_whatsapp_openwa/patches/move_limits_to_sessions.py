@@ -38,8 +38,19 @@ def execute():
 		return
 
 	for gateway_field, (session_field, shipped_default) in _MOVED.items():
+		# order_by=None is required, not cosmetic. get_value defaults to
+		# "modified desc", and `tabSingles` has exactly three columns —
+		# doctype, field, value — so the default ORDER BY makes MariaDB raise
+		# "Unknown column 'modified' in 'ORDER BY'" and aborts the migration.
+		#
+		# get_single_value() is not the alternative: it throws when the field
+		# is absent from the doctype, and every field read here has just been
+		# removed from OpenWA Gateway Settings by this same release.
 		stored = frappe.db.get_value(
-			"Singles", {"doctype": "OpenWA Gateway Settings", "field": gateway_field}, "value"
+			"Singles",
+			{"doctype": "OpenWA Gateway Settings", "field": gateway_field},
+			"value",
+			order_by=None,
 		)
 		try:
 			stored = int(stored or 0)
